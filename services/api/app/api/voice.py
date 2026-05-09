@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import APIError, get_company_id, get_db
-from app.integrations.email import send_sendgrid_email
+from app.integrations.email import send_resend_email
 from app.integrations.google_calendar import create_calendar_event, get_free_slots
 from app.limiter import limiter
 from app.models.audit_log import AuditLog
@@ -582,12 +582,12 @@ async def send_follow_up_email(
     db: AsyncSession = Depends(get_db),
     company_id: uuid.UUID = Depends(get_company_id),
 ) -> SendFollowUpEmailResponse:
-    """Send a follow-up email to a lead via SendGrid and record the result.
+    """Send a follow-up email to a lead via Resend and record the result.
 
-    Phase 4: dispatches the email synchronously via SendGrid before persisting
+    Phase 4: dispatches the email synchronously via Resend before persisting
     the EmailRecord. delivery_status reflects the actual send outcome:
-      - "sent"    — SendGrid accepted the message (202).
-      - "failed"  — SendGrid rejected it or credentials are not configured.
+      - "sent"    — Resend accepted the message (200).
+      - "failed"  — Resend rejected it or credentials are not configured.
       - "pending" — lead has no email address on file.
 
     Audit log written: action=EMAIL_SENT, entity_type=email_record.
@@ -633,12 +633,12 @@ async def send_follow_up_email(
     # Attempt real SendGrid dispatch if the lead has an email address.
     delivery_status = "pending"
     if lead.email:
-        sent = await send_sendgrid_email(
+        sent = await send_resend_email(
             to_email=lead.email,
             subject=subject,
             body=body_text,
-            api_key=settings.sendgrid_api_key,
-            from_email=settings.sendgrid_from_email,
+            api_key=settings.resend_api_key,
+            from_email=settings.resend_from_email,
         )
         delivery_status = "sent" if sent else "failed"
 
@@ -651,7 +651,7 @@ async def send_follow_up_email(
         subject=subject,
         body=body_text,
         template_type=body.template_type.value,
-        delivery_provider="sendgrid" if settings.sendgrid_api_key else None,
+        delivery_provider="resend" if settings.resend_api_key else None,
         delivery_status=delivery_status,
     )
     db.add(record)
