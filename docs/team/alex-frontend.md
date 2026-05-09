@@ -46,6 +46,17 @@ Do not introduce:
 - Initial component conventions
 - API field request list for Harsha
 
+Current prototype status:
+
+- `apps/web` contains a Next.js dashboard prototype based on the provided NAVA reference zip, rebranded as Waxwing Voice.
+- The prototype uses Next.js, React, TypeScript, Tailwind CSS, lucide-react icons, and local CSS/components to preserve the reference visual design.
+- The prototype includes Home, Calls, Call Detail, Leads, Property Knowledge, and Settings views.
+- The prototype includes documented temporary mock data until Harsha publishes API contracts.
+- The prototype reads `NEXT_PUBLIC_API_BASE_URL` and shows API mock mode when it is not configured.
+- The prototype includes loading, empty, error, and denied state handling for every page.
+- Keep future frontend work in `apps/web` and avoid changing backend, voice-agent, or infrastructure folders for UI-only changes.
+- Before opening a pull request, run `npm run lint` and `npm run build` from `apps/web`.
+
 ### Phase 1
 
 - Dashboard shell
@@ -224,4 +235,3 @@ A frontend feature is done when:
 - It is responsive for dashboard use
 - It has clear labels and useful actions
 - It is visible in staging, if part of the running product
-
