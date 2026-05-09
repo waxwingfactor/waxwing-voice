@@ -151,6 +151,30 @@ class Settings(BaseSettings):
     )
 
     # -----------------------------------------------------------------------
+    # STT provider selection — Phase 1 finish-up
+    # -----------------------------------------------------------------------
+    stt_provider: Literal["whisper", "mock"] = Field(
+        default="whisper",
+        description=(
+            "STT provider selection. 'whisper' uses WhisperSTTAdapter (OpenAI hosted Whisper). "
+            "'mock' uses MockSTTAdapter (tests/local dev without API key). "
+            "Set STT_PROVIDER=mock in .env for offline testing."
+        ),
+    )
+
+    # -----------------------------------------------------------------------
+    # LLM provider selection — Phase 1 finish-up
+    # -----------------------------------------------------------------------
+    llm_provider: Literal["gemini", "mock"] = Field(
+        default="gemini",
+        description=(
+            "LLM provider selection. 'gemini' uses GeminiLLMAdapter (Gemini-2.0 Flash). "
+            "'mock' uses MockLLMAdapter (tests/local dev without API key). "
+            "Set LLM_PROVIDER=mock in .env for offline testing."
+        ),
+    )
+
+    # -----------------------------------------------------------------------
     # Agent behavior
     # -----------------------------------------------------------------------
     default_property_id: str | None = Field(
