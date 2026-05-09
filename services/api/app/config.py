@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     database_url: str
     environment: str = "local"
     secret_key: str = "dev-secret-key"
+    jwt_algorithm: str = "HS256"
     embedding_dimensions: int = 1536
     # Loaded from OPENAI_API_KEY env var / .env — no default so it is never hardcoded in source.
     openai_api_key: str = ""

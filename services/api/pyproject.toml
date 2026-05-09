@@ -22,6 +22,10 @@ dependencies = [
     "boto3>=1.35",
     # .env file loading for local development
     "python-dotenv>=1.0",
+    # JWT authentication
+    "PyJWT>=2.9",
+    # Rate limiting
+    "slowapi>=0.1.9",
     # Document parsing for RAG pipeline (Phase 3)
     "pdfplumber>=0.11",
     "python-docx>=1.1",
@@ -81,5 +85,7 @@ quote-style = "double"
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
 filterwarnings = ["error"]

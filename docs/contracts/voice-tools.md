@@ -278,3 +278,43 @@ Upserts on `(property_id, phone)`. Send the same payload multiple times safely.
 ```
 
 **Response**: `{"handoff_id": "uuid", "call_id": "uuid", "status": "requested", "notification_sent": true}`
+
+---
+
+## Performance — P95 Latency Targets
+
+Voice-agent timeouts are padded above P95 targets to absorb network jitter without over-aggressive retries during a live call.
+
+| Tool                      | P95 target | Voice-agent timeout |
+|---------------------------|------------|---------------------|
+| get_property_profile      | ≤500ms     | 1s (cached)         |
+| search_property_knowledge | ≤2s        | 2s                  |
+| create_or_update_lead     | ≤1s        | 2s                  |
+| create_call_event         | ≤500ms     | 1s                  |
+| save_transcript_segment   | ≤500ms     | 1s                  |
+| save_call_summary         | ≤2s        | 5s (end of call)    |
+| check_tour_availability   | ≤3s        | 3s                  |
+| book_tour                 | ≤2s        | 5s                  |
+| send_follow_up_email      | ≤2s        | 5s                  |
+| request_human_handoff     | ≤1s        | 2s                  |
+| POST /v1/calls/           | ≤1s        | 2s                  |
+
+---
+
+## Idempotency
+
+The `Idempotency-Key` header is reserved but **NOT honored in Phase 1**.
+
+### Idempotent by design (safe to retry without coordination)
+
+- `search-knowledge`, `get_property_profile`, `check-availability` — read-only
+- `leads` — upsert on `(property_id, phone)`; duplicate POST is a no-op
+- `events`, `transcript-segment` — append-only; retries insert new rows but cause no side effects
+- `call-summary` — latest write wins by `call_id`
+
+### Hardened in Phase 5 (server-side dedup keys)
+
+- `book_tour` — server checks for an existing active booking on `(lead_id, tour_date, start_time)` before inserting; retries return the same `booking_id`. DB enforced via partial unique index `uq_bookings_lead_slot_active` (`status != 'cancelled'`).
+- `send_follow_up_email` — server checks for an existing `email_record` on `(call_id, template_type, recipient)` before dispatching; retries return the same `email_id` without re-sending. DB enforced via partial unique index `uq_email_records_call_template_recipient`.
+- `request_human_handoff` — duplicate requests within a 30-second window return the existing `handoff_id` without writing a second audit row.
+- `POST /v1/calls/` — `twilio_call_sid` carries a DB-level unique constraint (`uq_calls_twilio_call_sid`); duplicate POSTs with the same SID are rejected with a 409 at the DB layer.

@@ -21,7 +21,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from datetime import time as time_type
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -31,6 +31,7 @@ from app.config import get_settings
 from app.database import APIError, get_company_id, get_db
 from app.integrations.email import send_sendgrid_email
 from app.integrations.google_calendar import create_calendar_event, get_free_slots
+from app.limiter import limiter
 from app.models.audit_log import AuditLog
 from app.models.booking import Booking
 from app.models.call import Call
@@ -72,7 +73,9 @@ router = APIRouter(prefix="/voice", tags=["voice"])
 
 
 @router.post("/search-knowledge", response_model=SearchKnowledgeResponse)
+@limiter.limit("60/minute")
 async def search_knowledge(
+    request: Request,
     body: SearchKnowledgeRequest,
     db: AsyncSession = Depends(get_db),
     company_id: uuid.UUID = Depends(get_company_id),
@@ -156,7 +159,9 @@ async def search_knowledge(
 
 
 @router.post("/leads", response_model=CreateOrUpdateLeadResponse)
+@limiter.limit("60/minute")
 async def create_or_update_lead(
+    request: Request,
     body: CreateOrUpdateLeadRequest,
     db: AsyncSession = Depends(get_db),
     company_id: uuid.UUID = Depends(get_company_id),
@@ -254,7 +259,9 @@ async def create_or_update_lead(
 
 
 @router.post("/events", response_model=CreateCallEventResponse)
+@limiter.limit("60/minute")
 async def create_call_event(
+    request: Request,
     body: CreateCallEventRequest,
     db: AsyncSession = Depends(get_db),
     company_id: uuid.UUID = Depends(get_company_id),
@@ -291,7 +298,9 @@ async def create_call_event(
 
 
 @router.post("/transcript-segment", response_model=SaveTranscriptSegmentResponse)
+@limiter.limit("120/minute")
 async def save_transcript_segment(
+    request: Request,
     body: SaveTranscriptSegmentRequest,
     db: AsyncSession = Depends(get_db),
     company_id: uuid.UUID = Depends(get_company_id),
@@ -327,7 +336,9 @@ async def save_transcript_segment(
 
 
 @router.post("/call-summary", response_model=SaveCallSummaryResponse)
+@limiter.limit("60/minute")
 async def save_call_summary(
+    request: Request,
     body: SaveCallSummaryRequest,
     db: AsyncSession = Depends(get_db),
     company_id: uuid.UUID = Depends(get_company_id),
@@ -365,7 +376,9 @@ async def save_call_summary(
 
 
 @router.post("/check-availability", response_model=CheckTourAvailabilityResponse)
+@limiter.limit("60/minute")
 async def check_tour_availability(
+    request: Request,
     body: CheckTourAvailabilityRequest,
     db: AsyncSession = Depends(get_db),
     company_id: uuid.UUID = Depends(get_company_id),
@@ -442,7 +455,9 @@ async def check_tour_availability(
 
 
 @router.post("/book-tour", response_model=BookTourResponse)
+@limiter.limit("60/minute")
 async def book_tour(
+    request: Request,
     body: BookTourRequest,
     db: AsyncSession = Depends(get_db),
     company_id: uuid.UUID = Depends(get_company_id),
@@ -471,6 +486,26 @@ async def book_tour(
     await _get_property_or_404(db, body.property_id, company_id)
     lead = await _get_lead_or_404(db, body.lead_id, company_id)
     settings = get_settings()
+
+    # Idempotency check: return the existing active booking for this lead/slot
+    # without hitting Google Calendar or inserting a duplicate row.
+    existing_booking = await db.execute(
+        select(Booking).where(
+            Booking.lead_id == body.lead_id,
+            Booking.tour_date == body.selected_slot.date,
+            Booking.start_time == body.selected_slot.start_time,
+            Booking.status != "cancelled",
+        )
+    )
+    existing = existing_booking.scalar_one_or_none()
+    if existing is not None:
+        return BookTourResponse(
+            booking_id=existing.id,
+            calendar_event_id=existing.calendar_event_id,
+            tour_date=existing.tour_date,
+            start_time=existing.start_time,
+            status=existing.status,
+        )
 
     # Attempt real Google Calendar event creation.
     # Failure is non-fatal — the booking record is always created.
@@ -540,7 +575,9 @@ async def book_tour(
 
 
 @router.post("/send-email", response_model=SendFollowUpEmailResponse)
+@limiter.limit("60/minute")
 async def send_follow_up_email(
+    request: Request,
     body: SendFollowUpEmailRequest,
     db: AsyncSession = Depends(get_db),
     company_id: uuid.UUID = Depends(get_company_id),
@@ -570,6 +607,25 @@ async def send_follow_up_email(
     prop = await _get_property_or_404(db, body.property_id, company_id)
     lead = await _get_lead_or_404(db, body.lead_id, company_id)
     settings = get_settings()
+
+    # Idempotency check: if this (call_id, template_type, recipient) triple was
+    # already sent, return the existing record without re-dispatching via SendGrid.
+    if lead.email and body.call_id:
+        existing_email = await db.execute(
+            select(EmailRecord).where(
+                EmailRecord.call_id == body.call_id,
+                EmailRecord.template_type == body.template_type.value,
+                EmailRecord.recipient == lead.email,
+            )
+        )
+        existing_rec = existing_email.scalar_one_or_none()
+        if existing_rec is not None:
+            return SendFollowUpEmailResponse(
+                email_id=existing_rec.id,
+                recipient=existing_rec.recipient,
+                subject=existing_rec.subject,
+                delivery_status=existing_rec.delivery_status,
+            )
 
     subject = _build_subject(body.template_type.value, prop.name, body.context)
     body_text = _build_body(body.template_type.value, body.context)
@@ -632,7 +688,9 @@ async def send_follow_up_email(
 
 
 @router.post("/request-handoff", response_model=RequestHandoffResponse)
+@limiter.limit("60/minute")
 async def request_handoff(
+    request: Request,
     body: RequestHandoffRequest,
     db: AsyncSession = Depends(get_db),
     company_id: uuid.UUID = Depends(get_company_id),
@@ -653,6 +711,27 @@ async def request_handoff(
         404 CALL_NOT_FOUND — call_id not in company scope.
     """
     call = await _get_call_or_404(db, body.call_id, company_id)
+
+    # Idempotency check: suppress duplicate handoff requests within a 30-second
+    # window. Protects against voice agent retries creating redundant audit rows
+    # and double-firing any downstream notifications (Phase 4+).
+    recent_cutoff = datetime.now(UTC) - timedelta(seconds=30)
+    recent_handoff = await db.execute(
+        select(AuditLog).where(
+            AuditLog.entity_type == "call",
+            AuditLog.action == "HANDOFF_REQUESTED",
+            AuditLog.entity_id == str(body.call_id),
+            AuditLog.created_at >= recent_cutoff,
+        )
+    )
+    existing_audit = recent_handoff.scalar_one_or_none()
+    if existing_audit is not None:
+        return RequestHandoffResponse(
+            handoff_id=existing_audit.id,
+            call_id=body.call_id,
+            status="requested",
+            notification_sent=False,
+        )
 
     call.escalation_status = "escalated"
     call.escalation_flag = True

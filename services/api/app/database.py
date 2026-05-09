@@ -10,7 +10,9 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from fastapi import Header
+import jwt as pyjwt
+from fastapi import Depends
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import get_settings
@@ -28,6 +30,7 @@ def _normalize_database_url(url: str) -> str:
 
 _settings = get_settings()
 _db_url = _normalize_database_url(_settings.database_url)
+_bearer = HTTPBearer()
 
 engine = create_async_engine(
     _db_url,
@@ -103,20 +106,33 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
-async def get_company_id(x_company_id: str = Header(...)) -> uuid.UUID:
-    """Parse the X-Company-Id request header into a UUID.
+async def get_company_id(
+    credentials: HTTPAuthorizationCredentials = Depends(_bearer),
+) -> uuid.UUID:
+    """Verify the Bearer JWT and return the company_id claim.
 
-    Phase 1: header is trusted as-is (no JWT verification).
-    Phase 2: replace with JWT claims extraction.
+    Phase 5: replaces the trusted X-Company-Id header with cryptographic verification.
+    Raises APIError 401 on missing, expired, or tampered tokens.
+
+    Args:
+        credentials: HTTPBearer credentials extracted from the Authorization header.
+
+    Returns:
+        The company UUID embedded in the token's company_id claim.
 
     Raises:
-        APIError: 401 UNAUTHORIZED if the header is missing or not a valid UUID.
+        APIError: 401 UNAUTHORIZED if the token is missing, expired, or invalid.
     """
     try:
-        return uuid.UUID(x_company_id)
-    except (ValueError, AttributeError) as exc:
+        payload = pyjwt.decode(
+            credentials.credentials,
+            _settings.secret_key,
+            algorithms=[_settings.jwt_algorithm],
+        )
+        return uuid.UUID(payload["company_id"])
+    except (pyjwt.PyJWTError, KeyError, ValueError) as exc:
         raise APIError(
             status_code=401,
             code="UNAUTHORIZED",
-            message="X-Company-Id header must be a valid UUID.",
+            message="Invalid or expired token.",
         ) from exc

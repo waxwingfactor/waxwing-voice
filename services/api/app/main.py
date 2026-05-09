@@ -14,10 +14,14 @@ Run locally:
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.api import calls, documents, leads, properties, voice
 from app.config import get_settings
 from app.database import APIError
+from app.limiter import limiter
 
 settings = get_settings()
 
@@ -28,6 +32,9 @@ app = FastAPI(
         "Backend API for Waxwing Voice — property data, voice tools, RAG, and workflow automation."
     ),
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ---------------------------------------------------------------------------
 # Middleware
@@ -40,6 +47,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_middleware(SlowAPIMiddleware)
 
 # ---------------------------------------------------------------------------
 # Exception handlers
