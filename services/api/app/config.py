@@ -32,6 +32,19 @@ class Settings(BaseSettings):
     resend_api_key: str = ""
     resend_from_email: str = ""
 
+    # Twilio integration (Phase 5 — inbound call webhooks and media streaming)
+    # TWILIO_ACCOUNT_SID — Twilio Account SID (starts with "AC")
+    # TWILIO_AUTH_TOKEN — used to validate X-Twilio-Signature on incoming webhooks
+    # PUBLIC_BASE_URL — publicly reachable base URL for this service (e.g. ngrok URL)
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    public_base_url: str = "http://localhost:8000"
+
+    # Default scoping IDs used by Twilio webhooks which have no JWT context.
+    # These match the seed data inserted by Alembic's initial migration.
+    default_company_id: str = "00000000-0000-0000-0000-000000000001"
+    default_property_id: str = "00000000-0000-0000-0000-000000000003"
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -1,24 +1,26 @@
 """FastAPI application entry point for the Waxwing Voice API.
 
 Mount order:
-    /v1/properties  -> app.api.properties
-    /v1/calls       -> app.api.calls
-    /v1/voice       -> app.api.voice
-    /v1/leads       -> app.api.leads
-    /v1/documents   -> app.api.documents
+    /v1/properties      -> app.api.properties
+    /v1/calls           -> app.api.calls
+    /v1/voice           -> app.api.voice
+    /v1/voice (Twilio)  -> app.api.twilio_webhooks (POST /twilio, /status, /twilio/fallback)
+    /v1/leads           -> app.api.leads
+    /v1/documents       -> app.api.documents
+    /ws/twilio/media    -> app.api.twilio_webhooks.twilio_media_stream (WebSocket, no prefix)
 
 Run locally:
     cd services/api && uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 """
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.api import calls, documents, leads, properties, voice
+from app.api import calls, documents, leads, properties, twilio_webhooks, voice
 from app.config import get_settings
 from app.database import APIError
 from app.limiter import limiter
@@ -81,8 +83,22 @@ async def api_error_handler(request: Request, exc: APIError) -> JSONResponse:
 app.include_router(properties.router, prefix="/v1")
 app.include_router(calls.router, prefix="/v1")
 app.include_router(voice.router, prefix="/v1")
+app.include_router(twilio_webhooks.router, prefix="/v1/voice")
 app.include_router(leads.router, prefix="/v1")
 app.include_router(documents.router, prefix="/v1")
+
+
+# ---------------------------------------------------------------------------
+# WebSocket — Twilio Media Streams bridge
+# Registered directly on `app` (not via include_router) because WebSocket
+# routes do not propagate cleanly through a router that carries a URL prefix.
+# ---------------------------------------------------------------------------
+
+
+@app.websocket("/ws/twilio/media")
+async def _twilio_media_stream_route(websocket: WebSocket) -> None:
+    """Proxy to twilio_webhooks.twilio_media_stream — see that module for docs."""
+    await twilio_webhooks.twilio_media_stream(websocket)
 
 
 # ---------------------------------------------------------------------------
