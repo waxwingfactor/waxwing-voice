@@ -2,7 +2,7 @@
 
 Usage:
     cd services/api
-    DATABASE_URL=postgresql+asyncpg://... uv run python ../../tests/fixtures/seed_property.py
+    DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/waxwing
 
 The inserted UUIDs are deterministic so the script is idempotent — re-running it
 will hit the UNIQUE constraint on `id` and skip without duplicating data.
@@ -12,7 +12,13 @@ import asyncio
 import os
 import uuid
 
+from pathlib import Path
+
+from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+# Resolve .env relative to this file: tests/fixtures/ -> repo root -> services/api/.env
+load_dotenv(Path(__file__).resolve().parents[2] / "services" / "api" / ".env")
 
 # ---------------------------------------------------------------------------
 # Deterministic UUIDs — stable across runs so Akhil and Alex can hardcode them
@@ -63,9 +69,9 @@ async def seed(session: AsyncSession) -> None:
             )
             VALUES (
                 :id, :company_id, :name, :address, :description,
-                :amenities::jsonb, :office_hours::jsonb, :leasing_policies,
-                :maintenance_instructions, :escalation_contacts::jsonb,
-                :business_hour_rules::jsonb, :call_handling_rules::jsonb,
+                CAST(:amenities AS JSONB), CAST(:office_hours AS JSONB), :leasing_policies,
+                :maintenance_instructions, CAST(:escalation_contacts AS JSONB),
+                CAST(:business_hour_rules AS JSONB), CAST(:call_handling_rules AS JSONB),
                 now(), now()
             )
             ON CONFLICT (id) DO NOTHING
@@ -126,10 +132,10 @@ async def seed(session: AsyncSession) -> None:
                 )
                 VALUES (
                     :id,
-                    '00000000-0000-0000-0000-000000000099'::uuid,
+                    CAST('00000000-0000-0000-0000-000000000099' AS UUID),
                     :property_id, :company_id,
                     :chunk_text, :source_label, NULL,
-                    :embedding::vector,
+                    CAST(:embedding AS vector),
                     now()
                 )
                 ON CONFLICT (id) DO NOTHING
