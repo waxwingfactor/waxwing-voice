@@ -100,6 +100,7 @@ class EscalationReason(str, Enum):
     CALLER_REQUESTED = "caller_requested"
     BACKEND_TOOL_FAILURE = "backend_tool_failure"
     BOOKING_FAILED = "booking_failed"
+    CALLER_DISTRESS = "caller_distress"
     UNKNOWN = "unknown"
 
     def to_handoff_urgency(self) -> "HandoffUrgency":
@@ -113,6 +114,7 @@ class EscalationReason(str, Enum):
           FINANCIAL_ADVICE_REQUESTED -> high
           ELIGIBILITY_QUESTION     -> high
           CALLER_REQUESTED         -> high   (explicit human request — respect it)
+          CALLER_DISTRESS          -> high   (emotional escalation — needs a person)
           LOW_CONFIDENCE           -> medium
           BACKEND_TOOL_FAILURE     -> medium
           BOOKING_FAILED           -> medium
@@ -143,6 +145,7 @@ _ESCALATION_URGENCY_MAP: dict["EscalationReason", HandoffUrgency] = {
     EscalationReason.FINANCIAL_ADVICE_REQUESTED: HandoffUrgency.HIGH,
     EscalationReason.ELIGIBILITY_QUESTION: HandoffUrgency.HIGH,
     EscalationReason.CALLER_REQUESTED: HandoffUrgency.HIGH,
+    EscalationReason.CALLER_DISTRESS: HandoffUrgency.HIGH,
     EscalationReason.LOW_CONFIDENCE: HandoffUrgency.MEDIUM,
     EscalationReason.BACKEND_TOOL_FAILURE: HandoffUrgency.MEDIUM,
     EscalationReason.BOOKING_FAILED: HandoffUrgency.MEDIUM,

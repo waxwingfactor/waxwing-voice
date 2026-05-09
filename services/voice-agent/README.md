@@ -110,17 +110,19 @@ cp .env.example .env   # once Subbu publishes .env.example
 | `TWILIO_AUTH_TOKEN` | Phase 1 | Twilio Auth Token — never log this |
 | `GEMINI_API_KEY` | Phase 1 | Google Gemini API key — never log this |
 | `GEMINI_MODEL` | Phase 1 | Default: `gemini-2.0-flash` |
-| `WHISPER_MODEL` | Phase 1 | `tiny`, `base`, `small`, `medium`, `large`. Default: `base` |
-| `WHISPER_DEVICE` | Phase 1 | `cpu` or `cuda`. Default: `cpu` |
-| `VIBEVOICE_API_KEY` | Phase 1 | VibeVoice API key — never log this |
-| `VIBEVOICE_API_URL` | Phase 1 | VibeVoice endpoint |
+| `WHISPER_API_KEY` | Phase 1 | OpenAI hosted Whisper key — never log this |
+| `ELEVENLABS_API_KEY` | Phase 1 | ElevenLabs API key (ADR-0001) — never log this |
+| `ELEVENLABS_VOICE_ID` | Phase 1 | Voice preset. Default: Bella (`EXAVITQu4vr4xnSDxMaL`) |
+| `TTS_PROVIDER` | Phase 0+ | `elevenlabs` (default) or `mock` for local dev without an API key |
+| `VOICE_AGENT_JWT` | Phase 1 | Backend auth token (offline-minted). See `BLOCKERS.md §7` |
 | `DEFAULT_PROPERTY_ID` | Local testing | Fallback property ID for local dev |
 | `SILENCE_TIMEOUT_SECONDS` | Phase 1 | Seconds before silence handler fires. Default: `3.0` |
 | `LOG_LEVEL` | Phase 0+ | `DEBUG`, `INFO`, `WARNING`. Default: `INFO` |
 | `LOG_FORMAT` | Phase 0+ | `json` (prod) or `console` (local dev). Default: `json` |
 
 Secrets (`LIVEKIT_API_SECRET`, `TWILIO_AUTH_TOKEN`, `GEMINI_API_KEY`,
-`VIBEVOICE_API_KEY`) must never appear in logs or be committed to source control.
+`WHISPER_API_KEY`, `ELEVENLABS_API_KEY`, `VOICE_AGENT_JWT`) must never appear
+in logs or be committed to source control.
 
 ---
 

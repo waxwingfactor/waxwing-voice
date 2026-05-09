@@ -12,7 +12,7 @@ This document keeps the MVP focused. Each developer should follow these tool cho
 | Voice orchestration | LiveKit Agents | Custom WebRTC orchestration, alternate agent frameworks |
 | STT | Whisper | Deepgram, AssemblyAI, Google STT, browser STT |
 | LLM | Gemini-3.0 Flash | OpenAI, Anthropic, local LLMs, multi-model routing |
-| TTS | VibeVoice | ElevenLabs, Azure TTS, Google TTS, browser TTS |
+| TTS | ElevenLabs Turbo v2.5 | VibeVoice, Azure TTS, PlayHT, Google TTS, browser TTS |
 | Frontend | Next.js, React, TypeScript | Angular, Vue, Svelte, plain jQuery |
 | Frontend styling | Tailwind CSS and local components | Bootstrap, Material UI, multiple design systems |
 | Icons | lucide-react | Inline custom icon sets unless necessary |
@@ -27,9 +27,14 @@ This document keeps the MVP focused. Each developer should follow these tool cho
 | Relational DB | PostgreSQL | MySQL, MongoDB, DynamoDB |
 | Vector DB | pgvector | Pinecone, Qdrant, Weaviate, Chroma |
 | Storage | S3-compatible object storage | Local-only file storage for shared environments |
-| Email | One provider selected in Phase 0 | Multiple email vendors at the same time |
+| Email | Resend | SendGrid, Mailgun, multiple providers concurrently |
 | Calendar | Google Calendar first | Multiple calendar providers before booking is stable |
 | Infrastructure | Simple reproducible deploy scripts first | Complex orchestration before pilot need exists |
+
+Architecture decisions that changed this table:
+- [ADR-0001](../docs/adr/0001-elevenlabs-replaces-vibevoice.md) — ElevenLabs Turbo v2.5 replaces VibeVoice (TTS), 2026-05-09
+- [ADR-0002](../docs/adr/0002-resend-replaces-sendgrid.md) — Resend replaces SendGrid (email), 2026-05-09
+- [ADR-0003](../docs/adr/0003-local-deployment-for-mvp-demo.md) — Local deployment for MVP demo, 2026-05-09
 
 ## 3. Allowed Language Boundaries
 
@@ -104,7 +109,7 @@ Conflict prevention rules:
 
 Write an architecture decision record before:
 
-- Replacing Twilio, LiveKit, Whisper, Gemini-3.0 Flash, or VibeVoice
+- Replacing Twilio, LiveKit, Whisper, Gemini-3.0 Flash, ElevenLabs, or Resend
 - Adding a second backend framework
 - Adding another database or vector database
 - Adding another LLM, STT, or TTS provider
@@ -132,7 +137,7 @@ Akhil must keep the voice agent inside these boundaries:
 - Use LiveKit Agents for real-time call sessions.
 - Use Whisper for STT.
 - Use Gemini-3.0 Flash for the LLM.
-- Use VibeVoice for TTS.
+- Use ElevenLabs Turbo v2.5 for TTS.
 - Do not write business records directly to the database.
 - Use Harsha's backend tools for leads, calls, bookings, emails, handoffs, and retrieval.
 - Keep voice responses short enough for a phone conversation.
@@ -162,7 +167,7 @@ Alex must keep frontend work inside these boundaries:
 
 - Use Next.js, React, TypeScript, Tailwind CSS, and local components.
 - Use backend APIs only.
-- Do not call Twilio, LiveKit, Gemini, Whisper, VibeVoice, calendar, email, or database providers directly from the browser.
+- Do not call Twilio, LiveKit, Gemini, Whisper, ElevenLabs, calendar, email, or database providers directly from the browser.
 - Use shared types or generated API types when available.
 - Build loading, empty, error, and permission states for every data page.
 - Keep operational screens dense, clear, and work-focused.
@@ -178,7 +183,7 @@ Subbu must keep DevOps work inside these boundaries:
 - Document every required environment variable in `.env.example`.
 - Use separate credentials for local, staging, and pilot production.
 - Create provider accounts using shared team ownership, not personal-only ownership.
-- Keep Twilio, LiveKit, Gemini, Whisper, VibeVoice, database, storage, email, and calendar credentials clearly named.
+- Keep Twilio, LiveKit, Gemini, Whisper, ElevenLabs, Resend, database, storage, and calendar credentials clearly named.
 - Do not enable call recording until consent language and storage controls are approved.
 - Prefer simple reproducible deployment over complex infrastructure during MVP.
 - Add monitoring before pilot production.

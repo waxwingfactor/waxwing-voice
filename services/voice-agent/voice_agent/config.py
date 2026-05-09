@@ -2,12 +2,20 @@
 Application configuration loaded from environment variables.
 
 All secrets come from environment variables — never hardcoded here.
-Subbu will publish .env.example with the canonical list.
+See services/voice-agent/.env.example for the canonical variable list.
 
-Phase 0: defines the shape; Phase 1 will add provider-specific validation.
+Stack decisions:
+  - TTS: ElevenLabs Turbo v2.5 (ADR-0001, replaces VibeVoice)
+  - Email: Resend via backend (ADR-0002, no voice-agent config needed)
+  - Deployment: Local + Cloudflare Tunnel for MVP demo (ADR-0003)
+
+Phase 0: defines the shape; Phase 1 adds provider validation.
 """
 
+from __future__ import annotations
+
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,12 +25,13 @@ class Settings(BaseSettings):
     """
     Runtime configuration for the voice agent service.
 
-    Required for Phase 1 (marked with comments):
+    Required for Phase 1:
       - LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
       - TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
       - GEMINI_API_KEY
-      - WHISPER_MODEL (defaults to 'base' if not set)
-      - VIBEVOICE_API_KEY
+      - WHISPER_API_KEY (hosted OpenAI Whisper; provisioned by Subbu)
+      - ELEVENLABS_API_KEY (replaces VIBEVOICE_API_KEY per ADR-0001)
+      - ELEVENLABS_VOICE_ID (optional; defaults to Bella)
     """
 
     model_config = SettingsConfigDict(
@@ -104,26 +113,41 @@ class Settings(BaseSettings):
 
     # -----------------------------------------------------------------------
     # Whisper (STT) — Phase 1 required
+    # Hosted OpenAI Whisper. Subbu provisions the key; may share the same
+    # OpenAI key used for embeddings (semantically distinct env var).
     # -----------------------------------------------------------------------
-    whisper_model: str = Field(
-        default="base",
-        description="Whisper model size: tiny/base/small/medium/large. Tune in Phase 5.",
-    )
-    whisper_device: str = Field(
-        default="cpu",
-        description="Device for Whisper inference: cpu or cuda.",
+    whisper_api_key: str | None = Field(
+        default=None,
+        description=(
+            "OpenAI API key for hosted Whisper. Required for Phase 1. "
+            "Never log this. Set WHISPER_API_KEY in env. Provisioned by Subbu."
+        ),
     )
 
     # -----------------------------------------------------------------------
-    # VibeVoice (TTS) — Phase 1 required
+    # ElevenLabs (TTS) — Phase 1 required (ADR-0001 replaces VibeVoice)
     # -----------------------------------------------------------------------
-    vibevoice_api_key: str | None = Field(
+    elevenlabs_api_key: str | None = Field(
         default=None,
-        description="VibeVoice API key. Required for Phase 1. Never log this.",
+        description=(
+            "ElevenLabs API key. Required for Phase 1. Never log this. "
+            "Set ELEVENLABS_API_KEY in env. Provisioned by Subbu."
+        ),
     )
-    vibevoice_api_url: str = Field(
-        default="https://api.vibevoice.ai",
-        description="VibeVoice endpoint. Confirm with Subbu for staging vs prod.",
+    elevenlabs_voice_id: str = Field(
+        default="EXAVITQu4vr4xnSDxMaL",
+        description=(
+            "ElevenLabs voice ID. Defaults to 'Bella' — phone-quality female voice "
+            "recommended for Turbo v2.5. Override with ELEVENLABS_VOICE_ID env var."
+        ),
+    )
+    tts_provider: Literal["elevenlabs", "mock"] = Field(
+        default="elevenlabs",
+        description=(
+            "TTS provider selection. 'elevenlabs' uses ElevenLabsTTSAdapter (production). "
+            "'mock' uses MockTTSAdapter (tests/local dev without API key). "
+            "Set TTS_PROVIDER=mock in .env for local development without ElevenLabs credentials."
+        ),
     )
 
     # -----------------------------------------------------------------------

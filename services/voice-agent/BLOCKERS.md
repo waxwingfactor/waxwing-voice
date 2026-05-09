@@ -53,11 +53,22 @@ The compose file is well-formed; this is a local env issue, not a code issue. Co
 
 ## 5. Provider credentials (Subbu — Phase 1 wiring deferred)
 
-**Where:** Real Twilio/LiveKit/Whisper/Gemini/VibeVoice integration in `services/voice-agent/voice_agent/agent/session.py`.
+**Where:** Real Twilio/LiveKit/Whisper/Gemini/ElevenLabs integration in `services/voice-agent/voice_agent/agent/session.py`.
 
-**Status:** Stubbed. `VoiceSession._stt_transcribe`, `_llm_respond`, `_tts_speak` raise `NotImplementedError`.
+**Stack update (2026-05-09):** VibeVoice replaced by ElevenLabs Turbo v2.5 per ADR-0001. `VoiceSession._tts_speak` is now implemented via `ElevenLabsTTSAdapter` (no longer a `NotImplementedError`). The adapter requires `ELEVENLABS_API_KEY` to be set in the environment. Without a key, `ElevenLabsTTSAdapter.__init__` raises `ValueError` at session construction time.
 
-**Impact:** End-to-end voice calls require all five providers plus a routable phone number. None blocks Phase 2 conversation-logic work, which can be developed and tested with mock providers.
+**Status:**
+- `_tts_speak`: **IMPLEMENTED** — delegates to `ElevenLabsTTSAdapter`. Needs `ELEVENLABS_API_KEY` from Subbu to run end-to-end.
+- `_stt_transcribe`: Stubbed — raises `NotImplementedError`. Needs Whisper wiring (Phase 1 finish-up).
+- `_llm_respond`: Stubbed — raises `NotImplementedError`. Needs Gemini wiring (Phase 1 finish-up).
+
+**Required env vars for ElevenLabs (Subbu to provision):**
+- `ELEVENLABS_API_KEY` — ElevenLabs API key from the team account.
+- `ELEVENLABS_VOICE_ID` — optional; defaults to Bella (`EXAVITQu4vr4xnSDxMaL`).
+
+**Local dev without API key:** Set `TTS_PROVIDER=mock` in `.env` to use `MockTTSAdapter` — no network calls, no key needed.
+
+**Impact:** End-to-end voice calls require all five providers plus a routable phone number. `_tts_speak` can now be exercised locally with `TTS_PROVIDER=mock`. Whisper and Gemini remain blocked on credentials.
 
 ## 6. Design follow-ups from Phase 2 (Akhil — small, do before Phase 5)
 
@@ -65,7 +76,7 @@ These are not blocking; they are open polish items flagged by the Phase 2 agent.
 
 a) **Confidence threshold (0.4) should move to `Settings`** so Subbu can tune via env var without a code change. Currently a module-level constant in `voice_agent/conversation/confidence.py` with constructor override.
 
-b) **`EscalationReason.UNKNOWN` for emotional distress is too coarse.** Consider a dedicated `CALLER_DISTRESS` reason for clearer dashboard categorization. Requires extending Harsha's `EscalationReason` enum in `services/api/app/schemas/voice_tools.py` — needs a Harsha sync before Akhil changes anything.
+b) ~~`EscalationReason.UNKNOWN` for emotional distress is too coarse.~~ **RESOLVED.** Voice-agent adds `EscalationReason.CALLER_DISTRESS` → `HandoffUrgency.HIGH` in `_ESCALATION_URGENCY_MAP`. Harsha is adding the matching enum value to `services/api/app/schemas/voice_tools.py::EscalationReason` on his side.
 
 c) **`captured_fields` → `CallState.lead_fields` sync is manual in tests.** `VoiceSession` needs an explicit sync method (e.g. `_sync_lead_fields()`) once Phase 3's `_llm_respond` extracts structured fields from LLM output. Currently a no-op because there's no LLM.
 
@@ -97,4 +108,14 @@ c) **`captured_fields` → `CallState.lead_fields` sync is manual in tests.** `V
 
 ---
 
-**Last updated:** 2026-05-09 (after Phase 5 JWT auth migration)
+## Related decisions (ADRs)
+
+Architecture decisions that affect this file's blocker landscape:
+
+- [ADR-0001](../../docs/adr/0001-elevenlabs-replaces-vibevoice.md) — ElevenLabs Turbo v2.5 replaces VibeVoice as the locked TTS provider. Resolves the "VibeVoice credentials" blocker; replaces it with `ELEVENLABS_API_KEY` (§5 above).
+- [ADR-0002](../../docs/adr/0002-resend-replaces-sendgrid.md) — Resend replaces SendGrid. No voice-agent code change; email provider is invisible to this service.
+- [ADR-0003](../../docs/adr/0003-local-deployment-for-mvp-demo.md) — Local deployment for MVP demo. Cloudflare Tunnel provides the public Twilio webhook URL. Docker Compose provides the database. Subbu owns the demo runbook.
+
+---
+
+**Last updated:** 2026-05-09 (ElevenLabs TTS adapter implemented; ADR cross-references added)

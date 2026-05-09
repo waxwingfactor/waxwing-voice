@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from voice_agent.providers.tts.mock import MockTTSAdapter
 from voice_agent.state.call_state import EscalationReason, HandoffUrgency
 from voice_agent.tools.backend_client import (
     BackendClient,
@@ -49,6 +50,10 @@ class TestEscalationReasonToHandoffUrgency:
     def test_caller_requested_maps_to_high(self):
         """Explicit caller request for a human is treated as high urgency."""
         assert EscalationReason.CALLER_REQUESTED.to_handoff_urgency() == HandoffUrgency.HIGH
+
+    def test_caller_distress_maps_to_high(self):
+        """Emotional distress (frustration, profanity, repeated demands) needs a person."""
+        assert EscalationReason.CALLER_DISTRESS.to_handoff_urgency() == HandoffUrgency.HIGH
 
     def test_low_confidence_maps_to_medium(self):
         assert EscalationReason.LOW_CONFIDENCE.to_handoff_urgency() == HandoffUrgency.MEDIUM
@@ -449,6 +454,7 @@ class TestVoiceSessionStart:
             property_id=_FAKE_PROPERTY_ID,
             jwt_token=_FAKE_JWT,
             backend_client=mock_client,
+            tts_adapter=MockTTSAdapter(),
             twilio_call_sid="CA_test",
         )
 
@@ -473,6 +479,7 @@ class TestVoiceSessionStart:
             property_id=_FAKE_PROPERTY_ID,
             jwt_token=_FAKE_JWT,
             backend_client=mock_client,
+            tts_adapter=MockTTSAdapter(),
             twilio_call_sid="CA_session_test",
             livekit_room_id="room_xyz",
         )
@@ -503,6 +510,7 @@ class TestVoiceSessionStart:
             property_id=_FAKE_PROPERTY_ID,
             jwt_token=_FAKE_JWT,
             backend_client=mock_client,
+            tts_adapter=MockTTSAdapter(),
             twilio_call_sid="CA_fail",
         )
 
