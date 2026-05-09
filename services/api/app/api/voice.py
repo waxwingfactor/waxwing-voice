@@ -6,20 +6,20 @@ All writes go through these endpoints — the voice agent never touches the DB d
 Voice-facing errors include `suggested_action` context in the message where appropriate.
 
 Endpoints:
-    POST /v1/voice/search-knowledge     -> RAG retrieval (Phase 1: stub)
+    POST /v1/voice/search-knowledge     -> RAG retrieval (Phase 3: live pgvector)
     POST /v1/voice/leads                -> create or upsert a lead
     POST /v1/voice/events               -> record a call event
     POST /v1/voice/transcript-segment   -> append a transcript segment
     POST /v1/voice/call-summary         -> save call summary and AI fields
-    POST /v1/voice/check-availability   -> tour slot availability (Phase 1: stub)
-    POST /v1/voice/book-tour            -> create a booking record
-    POST /v1/voice/send-email           -> create an email record (no real send in P1)
+    POST /v1/voice/check-availability   -> tour slot availability (Phase 4: Google Calendar)
+    POST /v1/voice/book-tour            -> create booking + Google Calendar event
+    POST /v1/voice/send-email           -> send email via SendGrid and record it
     POST /v1/voice/request-handoff      -> escalate call and write audit log
 """
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from datetime import time as time_type
-from datetime import timedelta
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
@@ -29,6 +29,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import APIError, get_company_id, get_db
+from app.integrations.email import send_sendgrid_email
+from app.integrations.google_calendar import create_calendar_event, get_free_slots
 from app.models.audit_log import AuditLog
 from app.models.booking import Booking
 from app.models.call import Call
@@ -370,46 +372,67 @@ async def check_tour_availability(
 ) -> CheckTourAvailabilityResponse:
     """Return available tour slots for a date range.
 
-    Phase 1 STUB: returns 3 hardcoded 30-minute slots. Real Google Calendar
-    integration is implemented in Phase 4.
+    Phase 4: queries Google Calendar freebusy API via the service account. Falls
+    back to 3 hardcoded stub slots if Google Calendar is not configured or the
+    API call fails, so the voice agent is never completely broken.
 
     Consumer Notes (Akhil — voice agent):
         - Present `available_slots` to the caller as options.
         - Use `slot_id` when calling POST /v1/voice/book-tour.
-        - Stub slot_ids have the format "stub-{date}-{start_time}".
+        - Live slot_ids have the format "gcal-{calendar_prefix}-{date}-{HHMM}".
+        - Fallback stub slot_ids have the format "stub-{date}-{HH:MM}".
 
     Errors:
         404 PROPERTY_NOT_FOUND — property_id not in company scope.
     """
     await _get_property_or_404(db, body.property_id, company_id)
 
-    start = body.date_range.start_date
-    next_day = start + timedelta(days=1)
+    settings = get_settings()
 
-    stub_slots = [
-        AvailableSlot(
-            date=start,
-            start_time=time_type(10, 0),
-            end_time=time_type(10, 30),
-            slot_id=f"stub-{start}-10:00",
-        ),
-        AvailableSlot(
-            date=start,
-            start_time=time_type(14, 0),
-            end_time=time_type(14, 30),
-            slot_id=f"stub-{start}-14:00",
-        ),
-        AvailableSlot(
-            date=next_day,
-            start_time=time_type(10, 0),
-            end_time=time_type(10, 30),
-            slot_id=f"stub-{next_day}-10:00",
-        ),
-    ]
+    try:
+        raw_slots = await get_free_slots(
+            calendar_id=settings.google_calendar_id,
+            service_account_path=settings.google_service_account_path,
+            start_date=body.date_range.start_date,
+            end_date=body.date_range.end_date,
+        )
+        slots = [
+            AvailableSlot(
+                date=s["date"],
+                start_time=s["start_time"],
+                end_time=s["end_time"],
+                slot_id=s["slot_id"],
+            )
+            for s in raw_slots
+        ]
+    except Exception:
+        # Fall back to 3 stub slots so the voice agent is never completely broken.
+        start = body.date_range.start_date
+        next_day = start + timedelta(days=1)
+        slots = [
+            AvailableSlot(
+                date=start,
+                start_time=time_type(10, 0),
+                end_time=time_type(10, 30),
+                slot_id=f"stub-{start}-10:00",
+            ),
+            AvailableSlot(
+                date=start,
+                start_time=time_type(14, 0),
+                end_time=time_type(14, 30),
+                slot_id=f"stub-{start}-14:00",
+            ),
+            AvailableSlot(
+                date=next_day,
+                start_time=time_type(10, 0),
+                end_time=time_type(10, 30),
+                slot_id=f"stub-{next_day}-10:00",
+            ),
+        ]
 
     return CheckTourAvailabilityResponse(
         property_id=body.property_id,
-        available_slots=stub_slots,
+        available_slots=slots,
     )
 
 
@@ -424,15 +447,20 @@ async def book_tour(
     db: AsyncSession = Depends(get_db),
     company_id: uuid.UUID = Depends(get_company_id),
 ) -> BookTourResponse:
-    """Create a booking for a tour slot.
+    """Create a booking for a tour slot and attempt to create a Google Calendar event.
 
-    Phase 1: booking record is created with status="confirmed" but no real
-    calendar event is created (Google Calendar integration is Phase 4).
+    Phase 4: attempts real Google Calendar event creation. If Google Calendar is
+    not configured or the API call fails, the booking record is still created with
+    calendar_event_id=None — the booking is not rolled back.
+
+    Audit log written: action=TOUR_BOOKED, entity_type=booking.
 
     Consumer Notes (Akhil — voice agent):
         - Always call create_or_update_lead before this to get a lead_id.
-        - `calendar_event_id` is null in Phase 1 — inform the caller that a
-          confirmation email will follow instead.
+        - When calendar_event_id is present, a calendar invite was sent to the
+          lead's email address.
+        - When calendar_event_id is null, inform the caller a confirmation email
+          will follow separately.
         - Suggested caller message: "I've booked your tour for {date} at {time}.
           You'll receive a confirmation shortly."
 
@@ -441,8 +469,28 @@ async def book_tour(
         404 LEAD_NOT_FOUND     — lead_id not in company scope.
     """
     await _get_property_or_404(db, body.property_id, company_id)
-
     lead = await _get_lead_or_404(db, body.lead_id, company_id)
+    settings = get_settings()
+
+    # Attempt real Google Calendar event creation.
+    # Failure is non-fatal — the booking record is always created.
+    calendar_event_id: str | None = None
+    try:
+        start_dt = datetime.combine(
+            body.selected_slot.date, body.selected_slot.start_time, tzinfo=UTC
+        )
+        end_dt = datetime.combine(body.selected_slot.date, body.selected_slot.end_time, tzinfo=UTC)
+        summary = f"Property Tour — {body.tour_type.replace('_', ' ').title()}"
+        calendar_event_id = await create_calendar_event(
+            calendar_id=settings.google_calendar_id,
+            service_account_path=settings.google_service_account_path,
+            summary=summary,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            attendee_email=lead.email,
+        )
+    except Exception:
+        calendar_event_id = None  # booking still created without a calendar event
 
     booking = Booking(
         lead_id=lead.id,
@@ -454,14 +502,32 @@ async def book_tour(
         end_time=body.selected_slot.end_time,
         tour_type=body.tour_type,
         status="confirmed",
-        calendar_event_id=None,
+        calendar_event_id=calendar_event_id,
     )
     db.add(booking)
     await db.flush()
 
+    audit = AuditLog(
+        company_id=company_id,
+        property_id=body.property_id,
+        actor_type="VOICE_AGENT",
+        actor_id="voice_agent",
+        action="TOUR_BOOKED",
+        entity_type="booking",
+        entity_id=str(booking.id),
+        metadata_={
+            "lead_id": str(lead.id),
+            "tour_date": str(body.selected_slot.date),
+            "tour_type": body.tour_type,
+            "calendar_event_id": calendar_event_id,
+        },
+    )
+    db.add(audit)
+    await db.flush()
+
     return BookTourResponse(
         booking_id=booking.id,
-        calendar_event_id=None,
+        calendar_event_id=calendar_event_id,
         tour_date=booking.tour_date,
         start_time=booking.start_time,
         status="confirmed",
@@ -479,18 +545,23 @@ async def send_follow_up_email(
     db: AsyncSession = Depends(get_db),
     company_id: uuid.UUID = Depends(get_company_id),
 ) -> SendFollowUpEmailResponse:
-    """Queue a follow-up email to a lead.
+    """Send a follow-up email to a lead via SendGrid and record the result.
 
-    Phase 1: creates the EmailRecord with delivery_status="pending".
-    No real email is dispatched — email delivery worker is Phase 4.
+    Phase 4: dispatches the email synchronously via SendGrid before persisting
+    the EmailRecord. delivery_status reflects the actual send outcome:
+      - "sent"    — SendGrid accepted the message (202).
+      - "failed"  — SendGrid rejected it or credentials are not configured.
+      - "pending" — lead has no email address on file.
+
+    Audit log written: action=EMAIL_SENT, entity_type=email_record.
 
     Consumer Notes (Akhil — voice agent):
-        - Call after booking a tour to queue the confirmation email.
-        - `delivery_status="pending"` is expected in Phase 1 — tell callers
-          they will receive an email shortly.
-        - `recipient` is the lead's email; if the lead has no email on file,
-          the response `recipient` will be an empty string — voice agent should
-          prompt the caller for their email address first.
+        - Call after booking a tour to send the confirmation email.
+        - When delivery_status="failed", tell the caller: "I wasn't able to send
+          the confirmation email. Please check your email later or call us back."
+        - When delivery_status="pending", the lead has no email — prompt for one
+          before calling this endpoint.
+        - recipient will be an empty string if the lead has no email on file.
 
     Errors:
         404 PROPERTY_NOT_FOUND — property_id not in company scope.
@@ -498,9 +569,22 @@ async def send_follow_up_email(
     """
     prop = await _get_property_or_404(db, body.property_id, company_id)
     lead = await _get_lead_or_404(db, body.lead_id, company_id)
+    settings = get_settings()
 
     subject = _build_subject(body.template_type.value, prop.name, body.context)
     body_text = _build_body(body.template_type.value, body.context)
+
+    # Attempt real SendGrid dispatch if the lead has an email address.
+    delivery_status = "pending"
+    if lead.email:
+        sent = await send_sendgrid_email(
+            to_email=lead.email,
+            subject=subject,
+            body=body_text,
+            api_key=settings.sendgrid_api_key,
+            from_email=settings.sendgrid_from_email,
+        )
+        delivery_status = "sent" if sent else "failed"
 
     record = EmailRecord(
         property_id=body.property_id,
@@ -511,10 +595,27 @@ async def send_follow_up_email(
         subject=subject,
         body=body_text,
         template_type=body.template_type.value,
-        delivery_provider=None,
-        delivery_status="pending",
+        delivery_provider="sendgrid" if settings.sendgrid_api_key else None,
+        delivery_status=delivery_status,
     )
     db.add(record)
+    await db.flush()
+
+    audit = AuditLog(
+        company_id=company_id,
+        property_id=body.property_id,
+        actor_type="VOICE_AGENT",
+        actor_id="voice_agent",
+        action="EMAIL_SENT",
+        entity_type="email_record",
+        entity_id=str(record.id),
+        metadata_={
+            "lead_id": str(lead.id),
+            "template_type": body.template_type.value,
+            "delivery_status": delivery_status,
+        },
+    )
+    db.add(audit)
     await db.flush()
 
     return SendFollowUpEmailResponse(
