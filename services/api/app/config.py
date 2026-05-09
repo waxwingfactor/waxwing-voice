@@ -26,11 +26,11 @@ class Settings(BaseSettings):
     google_service_account_path: str = ""
     google_calendar_id: str = ""
 
-    # SendGrid integration (Phase 4)
-    # SENDGRID_API_KEY — SendGrid API key
-    # SENDGRID_FROM_EMAIL — verified sender email address
-    sendgrid_api_key: str = ""
-    sendgrid_from_email: str = ""
+    # Resend integration (Phase 4 — swapped from SendGrid)
+    # RESEND_API_KEY — Resend API key (starts with "re_")
+    # RESEND_FROM_EMAIL — verified sender address registered in Resend
+    resend_api_key: str = ""
+    resend_from_email: str = ""
 
 
 @lru_cache
