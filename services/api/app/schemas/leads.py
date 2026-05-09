@@ -5,7 +5,7 @@ NEEDS ALEX REVIEW: confirm which filters are needed on GET /v1/leads/ before Pha
 
 import uuid
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,10 +25,10 @@ class LeadCreateRequest(BaseModel):
     number_of_occupants: int | None = Field(default=None, ge=1, le=20)
     reason_for_moving: str | None = Field(default=None, max_length=500)
     how_heard: str | None = Field(default=None, max_length=255)
-    urgency: str | None = Field(default=None, max_length=50)
+    urgency: Literal["low", "medium", "high", "immediate"] | None = None
     tour_interest: bool = False
-    lead_score: str | None = Field(default=None, max_length=20)
-    lead_status: str = Field(default="new", max_length=50)
+    lead_score: Literal["hot", "warm", "cold"] | None = None
+    lead_status: Literal["new", "contacted", "toured", "applied", "closed", "lost"] = "new"
 
 
 class LeadUpdateRequest(BaseModel):
@@ -41,10 +41,10 @@ class LeadUpdateRequest(BaseModel):
     move_in_date: date | None = None
     desired_unit_type: str | None = Field(default=None, max_length=100)
     pet_info: dict[str, Any] | None = None
-    urgency: str | None = Field(default=None, max_length=50)
+    urgency: Literal["low", "medium", "high", "immediate"] | None = None
     tour_interest: bool | None = None
-    lead_score: str | None = Field(default=None, max_length=20)
-    lead_status: str | None = Field(default=None, max_length=50)
+    lead_score: Literal["hot", "warm", "cold"] | None = None
+    lead_status: Literal["new", "contacted", "toured", "applied", "closed", "lost"] | None = None
 
 
 class LeadListItem(BaseModel):
