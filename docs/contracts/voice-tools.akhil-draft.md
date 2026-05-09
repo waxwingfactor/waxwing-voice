@@ -10,6 +10,29 @@
 
 ---
 
+## Stack changes (2026-05-09)
+
+Three stack decisions were made and ADRs filed on 2026-05-09. All are Accepted.
+
+| Change | Old | New | ADR |
+|--------|-----|-----|-----|
+| TTS provider | VibeVoice | ElevenLabs Turbo v2.5 | [ADR-0001](../adr/0001-elevenlabs-replaces-vibevoice.md) |
+| Email provider | SendGrid | Resend | [ADR-0002](../adr/0002-resend-replaces-sendgrid.md) |
+| MVP deployment | Cloud staging | Local + Cloudflare Tunnel | [ADR-0003](../adr/0003-local-deployment-for-mvp-demo.md) |
+
+**Voice-agent impact:**
+- `_tts_speak` in `session.py` now delegates to `ElevenLabsTTSAdapter` (no longer `NotImplementedError`). Inject `MockTTSAdapter` in tests.
+- New config fields: `elevenlabs_api_key`, `elevenlabs_voice_id`, `tts_provider`. Old `vibevoice_api_key`/`vibevoice_api_url` removed.
+- `livekit-plugins-elevenlabs>=0.3.0` added to `pyproject.toml`.
+- Email provider change (ADR-0002) is Harsha's scope — no voice-agent code changes.
+
+**Environment variables changed:**
+- Removed: `VIBEVOICE_API_KEY`, `VIBEVOICE_API_URL`
+- Added: `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `TTS_PROVIDER`
+- See `services/voice-agent/.env.example` for the full canonical list.
+
+---
+
 ## Phase 5 reconciliation (2026-05-09)
 
 Harsha's Phase 5 commit (`a42dad3`) introduced three breaking changes that required voice-agent updates. All changes are confined to `services/voice-agent/`.

@@ -21,7 +21,7 @@ These decisions are part of the MVP guardrails. Do not replace them without a sh
 | Real-time voice orchestration | LiveKit Agents | Akhil |
 | STT | Whisper | Akhil |
 | LLM | Gemini-3.0 Flash | Akhil |
-| TTS | VibeVoice | Akhil |
+| TTS | ElevenLabs Turbo v2.5 | Akhil |
 | Frontend | Next.js, React, TypeScript | Alex |
 | Backend API | Python, FastAPI | Harsha |
 | Backend runtime | Uvicorn | Harsha, Subbu |
@@ -33,8 +33,13 @@ These decisions are part of the MVP guardrails. Do not replace them without a sh
 | ORM and migrations | SQLAlchemy 2.x, Alembic | Harsha |
 | API validation | Pydantic v2 | Harsha |
 | Object storage | S3-compatible bucket | Subbu, Harsha |
-| Email delivery | One transactional provider selected by Subbu in Phase 0 | Harsha, Subbu |
+| Email delivery | Resend | Harsha, Subbu |
 | Calendar integrations | Google Calendar first, Outlook Calendar after MVP foundation is stable | Harsha, Subbu |
+
+Architecture decisions that changed this table:
+- [ADR-0001](adr/0001-elevenlabs-replaces-vibevoice.md) — ElevenLabs Turbo v2.5 replaces VibeVoice (TTS), 2026-05-09
+- [ADR-0002](adr/0002-resend-replaces-sendgrid.md) — Resend replaces SendGrid (email), 2026-05-09
+- [ADR-0003](adr/0003-local-deployment-for-mvp-demo.md) — Local deployment for MVP demo, 2026-05-09
 
 ## 3. Product Vision
 
@@ -78,7 +83,7 @@ The MVP includes:
 - LiveKit Agent for real-time call orchestration
 - Whisper speech-to-text
 - Gemini-3.0 Flash conversation and workflow reasoning
-- VibeVoice text-to-speech
+- ElevenLabs Turbo v2.5 text-to-speech
 - Interruption handling, silence detection, and call state tracking
 - Property manager dashboard
 - Property profile setup
@@ -157,7 +162,7 @@ Every call produces:
 
 ### 7.1 Inbound Voice Flow
 
-Caller -> Twilio phone number -> Twilio SIP trunk or approved Twilio voice bridge -> LiveKit room -> LiveKit Agent -> Whisper STT -> Gemini-3.0 Flash -> backend tools and RAG -> VibeVoice TTS -> LiveKit -> Twilio -> caller.
+Caller -> Twilio phone number -> Twilio SIP trunk or approved Twilio voice bridge -> LiveKit room -> LiveKit Agent -> Whisper STT -> Gemini-3.0 Flash -> backend tools and RAG -> ElevenLabs Turbo v2.5 TTS -> LiveKit -> Twilio -> caller.
 
 Subbu owns Twilio, LiveKit, and environment setup. Akhil owns the working voice agent and the voice pipeline behavior. If the team chooses a Twilio Media Streams bridge instead of SIP, Akhil and Subbu must document the reason because it changes latency, deployment, and operational behavior.
 
@@ -203,7 +208,7 @@ Responsibilities:
 - Stream speech to Whisper
 - Send grounded prompts to Gemini-3.0 Flash
 - Call backend tools for retrieval and actions
-- Convert responses through VibeVoice
+- Convert responses through ElevenLabs Turbo v2.5
 - Handle barge-in, pauses, silence, and call ending
 - Produce transcript events and call lifecycle events
 
@@ -249,10 +254,10 @@ Responsibilities:
 - LiveKit project or server setup
 - Gemini API access
 - Whisper provider credentials
-- VibeVoice deployment or API access
+- ElevenLabs API key and voice selection
 - Database and pgvector provisioning
 - Object storage bucket
-- Email provider and sender domains
+- Resend account, sender domain DNS setup (SPF/DKIM/DMARC)
 - Calendar OAuth application setup
 - Secret management
 - Local, staging, and pilot production environments
@@ -541,7 +546,7 @@ The MVP is ready for a pilot when:
 - A real phone number can receive an inbound call through Twilio
 - The call reaches a LiveKit Agent
 - The agent can listen, respond, and handle interruptions
-- The agent uses Whisper, Gemini-3.0 Flash, and VibeVoice
+- The agent uses Whisper, Gemini-3.0 Flash, and ElevenLabs Turbo v2.5
 - The agent can answer from a sample property knowledge base
 - The agent can capture lead details during a call
 - The agent can save a transcript and summary

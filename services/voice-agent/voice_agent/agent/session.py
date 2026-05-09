@@ -45,6 +45,7 @@ from voice_agent.conversation.state_machine import (
     LeadCaptureStateMachine,
 )
 from voice_agent.conversation.summary_builder import SummaryBuilder
+from voice_agent.providers.tts.protocol import TTSAdapter, TTSProviderError
 from voice_agent.state.call_state import (
     CallPhase,
     CallState,
@@ -111,10 +112,22 @@ class VoiceSession:
         property_id: str,
         jwt_token: str,
         backend_client: BackendClient,
+        tts_adapter: TTSAdapter | None = None,
         twilio_call_sid: str | None = None,
         livekit_room_id: str | None = None,
         caller_phone_number: str | None = None,
     ) -> None:
+        """
+        Args:
+            property_id:      Property UUID string (from Twilio routing metadata).
+            jwt_token:        HS256 JWT for backend auth (see BLOCKERS.md §7).
+            backend_client:   Injected BackendClient instance.
+            tts_adapter:      TTSAdapter implementation. Defaults to ElevenLabsTTSAdapter
+                              built from settings. Inject MockTTSAdapter in tests.
+            twilio_call_sid:  Twilio call SID, if available at session start.
+            livekit_room_id:  LiveKit room ID for this call.
+            caller_phone_number: Caller's E.164 phone number (PII — not logged).
+        """
         self.state = CallState(
             property_id=property_id,
             twilio_call_sid=twilio_call_sid,
@@ -123,6 +136,38 @@ class VoiceSession:
         )
         self._jwt_token = jwt_token
         self._client = backend_client
+
+        # TTS adapter — injected for testability, built from settings in production.
+        # If no adapter is injected, use the configured provider:
+        #   tts_provider="elevenlabs" (default) -> ElevenLabsTTSAdapter (requires ELEVENLABS_API_KEY)
+        #   tts_provider="mock"                 -> MockTTSAdapter (no key needed, dev/test)
+        # If tts_provider="elevenlabs" but ELEVENLABS_API_KEY is missing, falls back to
+        # MockTTSAdapter and logs a warning — this prevents test breakage when running
+        # without credentials. In staging, Subbu must set ELEVENLABS_API_KEY.
+        if tts_adapter is None:
+            from voice_agent.config import get_settings
+            settings = get_settings()
+            if settings.tts_provider == "mock":
+                from voice_agent.providers.tts.mock import MockTTSAdapter
+                tts_adapter = MockTTSAdapter()
+                log.info("VoiceSession: using MockTTSAdapter (TTS_PROVIDER=mock)")
+            else:
+                from voice_agent.providers.tts.elevenlabs import ElevenLabsTTSAdapter
+                api_key = settings.elevenlabs_api_key
+                if not api_key:
+                    from voice_agent.providers.tts.mock import MockTTSAdapter
+                    tts_adapter = MockTTSAdapter()
+                    log.warning(
+                        "VoiceSession: ELEVENLABS_API_KEY not set — "
+                        "falling back to MockTTSAdapter. "
+                        "Set ELEVENLABS_API_KEY or TTS_PROVIDER=mock to suppress this warning."
+                    )
+                else:
+                    tts_adapter = ElevenLabsTTSAdapter(
+                        api_key=api_key,
+                        voice_id=settings.elevenlabs_voice_id,
+                    )
+        self._tts_adapter: TTSAdapter = tts_adapter
 
         # Phase 2: conversation orchestration modules
         self.state_machine = LeadCaptureStateMachine()
@@ -555,12 +600,20 @@ class VoiceSession:
     async def handle_barge_in(self) -> None:
         """
         Called when the caller starts speaking while the agent is speaking.
-        Phase 1: cancel current TTS stream, yield back to caller.
+
+        Cancels the current TTS stream via the adapter. The streaming loop in
+        ElevenLabsTTSAdapter checks the cancel event before each chunk and
+        exits cleanly — no abrupt connection teardown.
+
+        After cancel, control returns to the caller-utterance processing loop.
+        Phase 1 finish-up: LiveKit barge-in detection triggers this via the
+        Agents framework's VAD (Voice Activity Detection) event.
         """
         log.debug(
-            "handle_barge_in (stub)",
+            "handle_barge_in: cancelling TTS stream",
             extra={"call_id": self.state.call_id},
         )
+        await self._tts_adapter.cancel()
 
     async def handle_silence_timeout(self) -> None:
         """
@@ -623,8 +676,77 @@ class VoiceSession:
         raise NotImplementedError("Gemini LLM not wired yet (Phase 1).")
 
     async def _tts_speak(self, text: str) -> None:
-        """Phase 1: stream text through VibeVoice, play audio into LiveKit room."""
-        raise NotImplementedError("VibeVoice TTS not wired yet (Phase 1).")
+        """
+        Stream text through ElevenLabs Turbo v2.5 and push audio to LiveKit room.
+
+        Phase 1: ElevenLabsTTSAdapter is wired. LiveKit audio sink push is
+        stubbed — Phase 1 finish-up will route chunks into the LiveKit room's
+        audio track via the Agents framework.
+
+        On barge-in: caller calls handle_barge_in() -> self._tts_adapter.cancel().
+        The streaming loop inside ElevenLabsTTSAdapter checks the cancel event
+        before each chunk and exits cleanly.
+
+        On adapter failure: logs the error and does not re-raise — the call
+        continues without TTS output for this utterance. A TTSProviderError with
+        retryable=True triggers a single retry before falling back to silence.
+
+        Args:
+            text: Agent utterance text. Keep phone-length (1–3 sentences).
+        """
+        log.debug(
+            "_tts_speak: synthesizing",
+            extra={"call_id": self.state.call_id, "text_length": len(text)},
+            # text itself not logged — could contain PII if echoing caller input
+        )
+        try:
+            chunk_count = 0
+            async for chunk in self._tts_adapter.synthesize_streaming(text):
+                chunk_count += 1
+                # Phase 1 finish-up: push `chunk` to LiveKit audio sink here.
+                # e.g., await self._livekit_audio_source.capture_frame(chunk)
+                # Stub: discard chunk until LiveKit wiring is complete.
+                _ = chunk
+
+            log.debug(
+                "_tts_speak: synthesis complete",
+                extra={
+                    "call_id": self.state.call_id,
+                    "chunk_count": chunk_count,
+                },
+            )
+        except TTSProviderError as exc:
+            if exc.retryable:
+                log.warning(
+                    "_tts_speak: retryable TTS failure, retrying once",
+                    extra={
+                        "call_id": self.state.call_id,
+                        "error": exc.message,
+                        "status_code": exc.status_code,
+                    },
+                )
+                try:
+                    async for chunk in self._tts_adapter.synthesize_streaming(text):
+                        _ = chunk  # Phase 1 stub
+                except TTSProviderError as retry_exc:
+                    log.error(
+                        "_tts_speak: TTS retry failed, continuing without audio",
+                        extra={
+                            "call_id": self.state.call_id,
+                            "error": retry_exc.message,
+                        },
+                    )
+                    self.state.tool_failure_count += 1
+            else:
+                log.error(
+                    "_tts_speak: non-retryable TTS failure, continuing without audio",
+                    extra={
+                        "call_id": self.state.call_id,
+                        "error": exc.message,
+                        "status_code": exc.status_code,
+                    },
+                )
+                self.state.tool_failure_count += 1
 
     def _effective_call_id(self) -> uuid.UUID:
         """
