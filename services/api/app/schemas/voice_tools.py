@@ -11,7 +11,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 # ---------------------------------------------------------------------------
 # Shared sub-models
 # ---------------------------------------------------------------------------
@@ -82,8 +81,12 @@ class PropertyProfileResponse(BaseModel):
                 "office_hours": {"mon_fri": "9am-6pm", "sat": "10am-4pm"},
                 "leasing_policies": "12-month minimum lease. First and last month required.",
                 "maintenance_instructions": "Submit requests via the resident portal.",
-                "escalation_contacts": [{"name": "Jane Smith", "phone": "+15125550100", "role": "Property Manager"}],
-                "call_handling_rules": {"after_hours_message": "We are closed. Press 1 to leave a message."},
+                "escalation_contacts": [
+                    {"name": "Jane Smith", "phone": "+15125550100", "role": "Property Manager"}
+                ],
+                "call_handling_rules": {
+                    "after_hours_message": "We are closed. Press 1 to leave a message."
+                },
             }
         }
     )

@@ -63,7 +63,10 @@ select = [
     "SIM", # flake8-simplify
 ]
 ignore = [
-    "E501", # line too long — handled by formatter
+    "E501",  # line too long — handled by formatter
+    "B008",  # Depends(...) in FastAPI function defaults is the canonical pattern
+    "UP046", # Generic subclass syntax — existing schemas use Generic[T], not changing
+    "UP042", # StrEnum — existing voice_tools schemas use str+Enum; not changing
 ]
 
 [tool.ruff.lint.isort]

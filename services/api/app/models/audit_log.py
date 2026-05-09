@@ -43,5 +43,6 @@ class AuditLog(UUIDMixin, CreatedOnlyMixin, Base):
 
     # JSONB for context — must NOT contain PII (use entity IDs, not names/emails)
     metadata_: Mapped[dict[str, Any] | None] = mapped_column(
-        "metadata", JSONB  # column name is "metadata" in DB; attribute is metadata_ to avoid clash
+        "metadata",
+        JSONB,  # column name is "metadata" in DB; attribute is metadata_ to avoid clash
     )

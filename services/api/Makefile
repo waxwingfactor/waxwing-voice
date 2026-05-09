@@ -2,7 +2,7 @@
 # Requires: uv (https://docs.astral.sh/uv/)
 # On Windows: use Git Bash, WSL, or run `uv run <command>` directly
 
-.PHONY: run lint format test migrate migrate-create install
+.PHONY: run lint format test migrate migrate-create install up down
 
 # Install all dependencies (runtime + dev) into the uv-managed venv
 install:
@@ -33,3 +33,11 @@ migrate:
 # Create a new migration: make migrate-create name=add_leads
 migrate-create:
 	uv run alembic revision --autogenerate -m "$(name)"
+
+# Start the database container (pgvector/pg16)
+up:
+	docker compose -f ../../docker-compose.yml up -d db
+
+# Stop the database container
+down:
+	docker compose -f ../../docker-compose.yml down

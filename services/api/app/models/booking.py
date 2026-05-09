@@ -36,7 +36,9 @@ class Booking(UUIDMixin, TimestampMixin, Base):
     )
 
     # Values: google_calendar (first; others post-MVP)
-    calendar_provider: Mapped[str] = mapped_column(String(50), nullable=False, default="google_calendar")
+    calendar_provider: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="google_calendar"
+    )
     calendar_event_id: Mapped[str | None] = mapped_column(String(255))
 
     tour_date: Mapped[date | None] = mapped_column(Date)
@@ -48,4 +50,6 @@ class Booking(UUIDMixin, TimestampMixin, Base):
     # Values: confirmed | cancelled | rescheduled | no_show | completed
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="confirmed")
     # Values: pending | sent | failed
-    confirmation_email_status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
+    confirmation_email_status: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="pending"
+    )

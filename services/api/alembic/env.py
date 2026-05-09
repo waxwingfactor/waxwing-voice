@@ -1,19 +1,21 @@
 """Alembic migration environment — async-first using asyncpg."""
+
 import asyncio
 import os
 from logging.config import fileConfig
 
-from alembic import context
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlalchemy.pool import NullPool
+
+from alembic import context
 
 # Load .env so `uv run alembic upgrade head` works without pre-setting env vars
 load_dotenv()
 
 # Import Base so that all models register with the metadata.
 # The __init__.py re-exports all model classes — Alembic sees every table.
-from app.models import Base  # noqa: F401
+from app.models import Base  # noqa: E402, F401
 
 config = context.config
 if config.config_file_name is not None:
