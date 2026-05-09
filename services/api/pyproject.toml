@@ -34,6 +34,8 @@ dependencies = [
     "google-auth>=2.36",
     "google-auth-oauthlib>=1.2",
     "google-api-python-client>=2.155",
+    # Twilio — inbound call webhooks, TwiML generation, and signature validation (Phase 5)
+    "twilio>=9.0",
 ]
 
 [dependency-groups]
