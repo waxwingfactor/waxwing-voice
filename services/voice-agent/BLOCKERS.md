@@ -76,7 +76,7 @@ These are not blocking; they are open polish items flagged by the Phase 2 agent.
 
 a) **Confidence threshold (0.4) should move to `Settings`** so Subbu can tune via env var without a code change. Currently a module-level constant in `voice_agent/conversation/confidence.py` with constructor override.
 
-b) **`EscalationReason.UNKNOWN` for emotional distress is too coarse.** Consider a dedicated `CALLER_DISTRESS` reason for clearer dashboard categorization. Requires extending Harsha's `EscalationReason` enum in `services/api/app/schemas/voice_tools.py` — needs a Harsha sync before Akhil changes anything.
+b) ~~`EscalationReason.UNKNOWN` for emotional distress is too coarse.~~ **RESOLVED.** Voice-agent adds `EscalationReason.CALLER_DISTRESS` → `HandoffUrgency.HIGH` in `_ESCALATION_URGENCY_MAP`. Harsha is adding the matching enum value to `services/api/app/schemas/voice_tools.py::EscalationReason` on his side.
 
 c) **`captured_fields` → `CallState.lead_fields` sync is manual in tests.** `VoiceSession` needs an explicit sync method (e.g. `_sync_lead_fields()`) once Phase 3's `_llm_respond` extracts structured fields from LLM output. Currently a no-op because there's no LLM.
 

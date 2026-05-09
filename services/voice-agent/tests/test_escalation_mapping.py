@@ -51,6 +51,10 @@ class TestEscalationReasonToHandoffUrgency:
         """Explicit caller request for a human is treated as high urgency."""
         assert EscalationReason.CALLER_REQUESTED.to_handoff_urgency() == HandoffUrgency.HIGH
 
+    def test_caller_distress_maps_to_high(self):
+        """Emotional distress (frustration, profanity, repeated demands) needs a person."""
+        assert EscalationReason.CALLER_DISTRESS.to_handoff_urgency() == HandoffUrgency.HIGH
+
     def test_low_confidence_maps_to_medium(self):
         assert EscalationReason.LOW_CONFIDENCE.to_handoff_urgency() == HandoffUrgency.MEDIUM
 
