@@ -10,8 +10,8 @@ requires-python = ">=3.12"
 dependencies = [
     # Telephony bridge (Twilio webhook parsing) — Phase 1 will add twilio SDK
     "twilio>=9.0.0",
-    # Voice orchestration — LiveKit Agents framework
-    "livekit-agents>=0.8.0",
+    # Voice orchestration — LiveKit Agents framework (ADR-0004: Twilio→LiveKit bridge)
+    "livekit-agents>=0.10",
     # TTS — ElevenLabs Turbo v2.5 via official LiveKit plugin (ADR-0001)
     # livekit-plugins-elevenlabs provides the LiveKit Agents TTS integration.
     # ElevenLabsTTSAdapter also uses httpx directly for streaming — no extra dep.

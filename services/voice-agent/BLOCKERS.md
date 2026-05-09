@@ -51,24 +51,30 @@ The compose file is well-formed; this is a local env issue, not a code issue. Co
 
 **Impact:** Voice agent can call the route safely; conversation flow needs to handle empty-results gracefully (prompt fallback language, escalation if knowledge is required). Already covered by `system_prompt.py` "say I do not have that information" rules.
 
-## 5. Provider credentials (Subbu — Phase 1 wiring deferred)
+## 5. RESOLVED — Provider credentials (Phase 1 finish-up complete, 2026-05-09)
 
-**Where:** Real Twilio/LiveKit/Whisper/Gemini/ElevenLabs integration in `services/voice-agent/voice_agent/agent/session.py`.
+**Resolution:** All three provider adapters are now implemented with the mock/real pattern:
 
-**Stack update (2026-05-09):** VibeVoice replaced by ElevenLabs Turbo v2.5 per ADR-0001. `VoiceSession._tts_speak` is now implemented via `ElevenLabsTTSAdapter` (no longer a `NotImplementedError`). The adapter requires `ELEVENLABS_API_KEY` to be set in the environment. Without a key, `ElevenLabsTTSAdapter.__init__` raises `ValueError` at session construction time.
+- `_tts_speak`: **IMPLEMENTED** — `ElevenLabsTTSAdapter` (requires `ELEVENLABS_API_KEY`) or `MockTTSAdapter` (`TTS_PROVIDER=mock`)
+- `_stt_transcribe`: **IMPLEMENTED** — `WhisperSTTAdapter` (requires `WHISPER_API_KEY`) or `MockSTTAdapter` (`STT_PROVIDER=mock`)
+- `_llm_respond`: **IMPLEMENTED** — `GeminiLLMAdapter` (requires `GEMINI_API_KEY`) or `MockLLMAdapter` (`LLM_PROVIDER=mock`)
 
-**Status:**
-- `_tts_speak`: **IMPLEMENTED** — delegates to `ElevenLabsTTSAdapter`. Needs `ELEVENLABS_API_KEY` from Subbu to run end-to-end.
-- `_stt_transcribe`: Stubbed — raises `NotImplementedError`. Needs Whisper wiring (Phase 1 finish-up).
-- `_llm_respond`: Stubbed — raises `NotImplementedError`. Needs Gemini wiring (Phase 1 finish-up).
+**Required env vars for production (Subbu to provision):**
+- `ELEVENLABS_API_KEY` — ElevenLabs API key from the team account
+- `ELEVENLABS_VOICE_ID` — optional; defaults to Bella (`EXAVITQu4vr4xnSDxMaL`)
+- `WHISPER_API_KEY` — OpenAI API key for hosted Whisper transcription
+- `GEMINI_API_KEY` — Google Gemini API key for Gemini-2.0 Flash
+- `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` — LiveKit Cloud project (ADR-0004)
 
-**Required env vars for ElevenLabs (Subbu to provision):**
-- `ELEVENLABS_API_KEY` — ElevenLabs API key from the team account.
-- `ELEVENLABS_VOICE_ID` — optional; defaults to Bella (`EXAVITQu4vr4xnSDxMaL`).
+**Local dev without API keys (fully supported):**
 
-**Local dev without API key:** Set `TTS_PROVIDER=mock` in `.env` to use `MockTTSAdapter` — no network calls, no key needed.
+```
+STT_PROVIDER=mock LLM_PROVIDER=mock TTS_PROVIDER=mock python -m voice_agent
+```
 
-**Impact:** End-to-end voice calls require all five providers plus a routable phone number. `_tts_speak` can now be exercised locally with `TTS_PROVIDER=mock`. Whisper and Gemini remain blocked on credentials.
+No network calls, no keys needed. All 9 call scenarios exercise correctly in this mode.
+
+**Remaining gap:** `livekit-agents>=0.10` is declared in `pyproject.toml` but not installed in the venv (network not available during this session). The package must be installed (`uv sync`) before the worker can connect to LiveKit. All unit tests pass without it because `voice_agent/worker/` uses try/except import guards.
 
 ## 6. Design follow-ups from Phase 2 (Akhil — small, do before Phase 5)
 
@@ -80,7 +86,7 @@ b) ~~`EscalationReason.UNKNOWN` for emotional distress is too coarse.~~ **RESOLV
 
 c) **`captured_fields` → `CallState.lead_fields` sync is manual in tests.** `VoiceSession` needs an explicit sync method (e.g. `_sync_lead_fields()`) once Phase 3's `_llm_respond` extracts structured fields from LLM output. Currently a no-op because there's no LLM.
 
-## 7. Voice agent JWT minting strategy unclear (NEW — Phase 5, needs Subbu+Harsha decision)
+## 7. Voice agent JWT minting strategy unclear (Phase 5, needs Subbu+Harsha decision)
 
 **Where:** `services/voice-agent/voice_agent/config.py` → `voice_agent_jwt` setting.
 
@@ -100,6 +106,22 @@ c) **`captured_fields` → `CallState.lead_fields` sync is manual in tests.** `V
 
 **Action:** Resolve before declaring Phase 1 done in staging. Default TTL from `create_access_token()` is 24h — even option 1 works for MVP if Subbu provisions rotation.
 
+## 8. Audio resampling in Harsha's backend (new — Phase 1 finish-up, 2026-05-09)
+
+**Where:** `services/api/app/` — Harsha's `/ws/twilio/media` WebSocket bridge (ADR-0004).
+
+**Issue:** Twilio Media Streams delivers audio as mu-law encoded at 8kHz. The voice-agent's `WhisperSTTAdapter` expects 16kHz 16-bit PCM. Resampling is Harsha's responsibility (boundary: he owns the bridge). Standard options:
+
+- **`audioop.ulaw2lin` + `audioop.ratecv`** — Python stdlib (available in Python 3.12, deprecated in 3.13). Simple, no extra deps.
+- **`numpy` + linear interpolation** — more control, already a common indirect dependency.
+- **`scipy.signal.resample`** — higher-quality resampling, adds a dep to Harsha's service.
+
+**Recommendation for Harsha:** `audioop` is simplest for MVP. If Python 3.13 migration is planned, switch to `numpy` resampling before that.
+
+**Impact on voice-agent:** None — the voice-agent sees 16kHz PCM from LiveKit regardless of how Harsha resampled it. This blocker is documented here for cross-team awareness.
+
+**Owner:** Harsha (backend bridge). Subbu to verify Python version in staging before `audioop` is used.
+
 ---
 
 ## Resolved in Phase 5 (Harsha commit a42dad3)
@@ -115,7 +137,8 @@ Architecture decisions that affect this file's blocker landscape:
 - [ADR-0001](../../docs/adr/0001-elevenlabs-replaces-vibevoice.md) — ElevenLabs Turbo v2.5 replaces VibeVoice as the locked TTS provider. Resolves the "VibeVoice credentials" blocker; replaces it with `ELEVENLABS_API_KEY` (§5 above).
 - [ADR-0002](../../docs/adr/0002-resend-replaces-sendgrid.md) — Resend replaces SendGrid. No voice-agent code change; email provider is invisible to this service.
 - [ADR-0003](../../docs/adr/0003-local-deployment-for-mvp-demo.md) — Local deployment for MVP demo. Cloudflare Tunnel provides the public Twilio webhook URL. Docker Compose provides the database. Subbu owns the demo runbook.
+- [ADR-0004](../../docs/adr/0004-twilio-livekit-bridge-architecture.md) — Twilio→LiveKit bridge. Backend bridges Twilio Media Streams into LiveKit rooms; voice-agent runs as a LiveKit Agents worker. Accepted 2026-05-09.
 
 ---
 
-**Last updated:** 2026-05-09 (ElevenLabs TTS adapter implemented; ADR cross-references added)
+**Last updated:** 2026-05-09 (Phase 1 finish-up: STT/LLM/TTS adapters implemented; ADR-0004 accepted; §5 provider-credentials resolved; §8 audio resampling blocker added for Harsha)
