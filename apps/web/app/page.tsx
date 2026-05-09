@@ -25,318 +25,177 @@ import {
   ShieldAlert,
   Trash2,
   Upload,
-  UsersRound
+  UsersRound,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { ChangeEvent, PointerEvent, ReactNode, useState } from "react";
+import { ChangeEvent, PointerEvent, ReactNode, useEffect, useState } from "react";
+import {
+  PROPERTY_ID,
+  getPropertySummary,
+  listCalls,
+  listLeads,
+  getCall,
+  getProperty,
+  uploadDocument,
+  type PropertySummary,
+  type CallListItem,
+  type CallDetail,
+  type LeadListItem,
+  type PropertyDetail,
+} from "../lib/api";
 
 type View = "home" | "calls" | "call-detail" | "leads" | "knowledge" | "settings";
 type DataMode = "ready" | "loading" | "empty" | "error" | "denied";
-type LeadStatus = "New" | "Qualified" | "Needs follow-up" | "Not qualified";
-type CallIntent = "Tour" | "Availability" | "Pricing" | "Maintenance" | "Unknown";
 
-type CallRecord = {
-  id: string;
-  caller: string;
-  phone: string;
-  property: string;
-  intent: CallIntent;
-  time: string;
-  date: "Today" | "Yesterday" | "This week";
-  duration: string;
-  summary: string;
-  status: "Completed" | "Live" | "Escalated";
-  leadStatus: LeadStatus;
-  score: number | null;
-  escalated: boolean;
-  booked: boolean;
-  followUpSent: boolean;
-  moveIn: string;
-  budget: string;
-  unitPreference: string;
-  tourStatus: string;
-  booking: string;
-  emailStatus: string;
-  handoffStatus: string;
-  actionItems: string[];
-  transcript: Array<{ speaker: "Waxwing Voice" | "Caller"; time: string; text: string }>;
-};
+// ---------------------------------------------------------------------------
+// Display helpers
+// ---------------------------------------------------------------------------
 
-type LeadRecord = {
-  id: string;
-  name: string;
-  phone: string;
-  email: string;
-  status: LeadStatus;
-  moveIn: string;
-  budget: string;
-  unitPreference: string;
-  tourStatus: string;
-  lastSummary: string;
-  lastCallId: string;
-};
+function formatDuration(seconds: number | null): string {
+  if (seconds == null) return "—";
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
 
-type KnowledgeDoc = {
-  id: string;
-  name: string;
-  status: "Indexed" | "Processing" | "Failed";
-  uploaded: string;
-};
+function formatRelativeTime(isoDate: string): string {
+  const diff = Date.now() - new Date(isoDate).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+function formatDateGroup(isoDate: string): string {
+  const diff = Date.now() - new Date(isoDate).getTime();
+  const days = diff / 86400000;
+  if (days < 1) return "Today";
+  if (days < 2) return "Yesterday";
+  if (days < 7) return "This week";
+  return "Older";
+}
 
-const calls: CallRecord[] = [
-  {
-    id: "C-2840",
-    caller: "Marcus Lee",
-    phone: "(512) 555-0193",
-    property: "5520 Travis Heights Blvd",
-    intent: "Tour",
-    time: "14m ago",
-    date: "Today",
-    duration: "4:02",
-    summary: "Qualified three-person household. Wants a Saturday showing for the Travis Heights three-bedroom.",
-    status: "Completed",
-    leadStatus: "Qualified",
-    score: 92,
-    escalated: false,
-    booked: true,
-    followUpSent: true,
-    moveIn: "Jun 15",
-    budget: "$3,400",
-    unitPreference: "3 bed / 2.5 bath",
-    tourStatus: "Booked for Sat, May 9 at 11:00 AM",
-    booking: "Sat, May 9 at 11:00 AM with Hannah Walker",
-    emailStatus: "Confirmation sent",
-    handoffStatus: "No handoff needed",
-    actionItems: ["Send gate code before showing", "Attach application link in follow-up"],
-    transcript: [
-      { speaker: "Waxwing Voice", time: "0:00", text: "Thanks for calling Hunter Property Management. Are you calling about an available unit?" },
-      { speaker: "Caller", time: "0:06", text: "Yes, the three-bedroom on Travis Heights." },
-      { speaker: "Waxwing Voice", time: "1:24", text: "You meet the initial criteria. Would you like to schedule a showing?" },
-      { speaker: "Caller", time: "1:40", text: "Saturday morning works great." }
-    ]
-  },
-  {
-    id: "C-2839",
-    caller: "Priya Ramaswamy",
-    phone: "(737) 555-0102",
-    property: "210 Mueller Ave",
-    intent: "Availability",
-    time: "32m ago",
-    date: "Today",
-    duration: "3:18",
-    summary: "Asked about May availability, pet policy, and lease length. Qualified and requested weekday evening tour.",
-    status: "Completed",
-    leadStatus: "Qualified",
-    score: 88,
-    escalated: false,
-    booked: true,
-    followUpSent: true,
-    moveIn: "May 25",
-    budget: "$2,250",
-    unitPreference: "2 bed / 1 bath",
-    tourStatus: "Booked for Mon, May 11 at 5:30 PM",
-    booking: "Mon, May 11 at 5:30 PM with leasing team",
-    emailStatus: "Confirmation sent",
-    handoffStatus: "No handoff needed",
-    actionItems: ["Confirm pet deposit amount"],
-    transcript: [
-      { speaker: "Waxwing Voice", time: "0:00", text: "I can help with availability and scheduling." },
-      { speaker: "Caller", time: "0:18", text: "I need something available around the end of May." },
-      { speaker: "Waxwing Voice", time: "2:44", text: "I have an evening showing available Monday." }
-    ]
-  },
-  {
-    id: "C-2838",
-    caller: "Daniel Ortiz",
-    phone: "(512) 555-0177",
-    property: "904 Brazos St #3B",
-    intent: "Pricing",
-    time: "1h ago",
-    date: "Today",
-    duration: "2:45",
-    summary: "Asked about one-bedroom pricing. Did not meet credit criteria and requested a human follow-up.",
-    status: "Escalated",
-    leadStatus: "Needs follow-up",
-    score: 41,
-    escalated: true,
-    booked: false,
-    followUpSent: false,
-    moveIn: "Jun 1",
-    budget: "$1,900",
-    unitPreference: "1 bed / 1 bath",
-    tourStatus: "Not booked",
-    booking: "No booking",
-    emailStatus: "Follow-up pending",
-    handoffStatus: "Assigned to Hannah Walker",
-    actionItems: ["Call back about guarantor policy", "Send alternative listings"],
-    transcript: [
-      { speaker: "Caller", time: "0:11", text: "My credit may be an issue. Can someone explain the policy?" },
-      { speaker: "Waxwing Voice", time: "1:58", text: "I can have the property team follow up on that." }
-    ]
-  },
-  {
-    id: "C-2837",
-    caller: "Jasmine Powell",
-    phone: "(512) 555-0124",
-    property: "78 Lamar Lofts #1204",
-    intent: "Tour",
-    time: "2h ago",
-    date: "Today",
-    duration: "5:11",
-    summary: "Strong lead for Lamar Lofts. Asked about parking, pets, and move-in timing.",
-    status: "Completed",
-    leadStatus: "Qualified",
-    score: 95,
-    escalated: false,
-    booked: true,
-    followUpSent: true,
-    moveIn: "Available now",
-    budget: "$2,900",
-    unitPreference: "2 bed / 2 bath",
-    tourStatus: "Booked for Tue, May 12 at 6:00 PM",
-    booking: "Tue, May 12 at 6:00 PM",
-    emailStatus: "Confirmation sent",
-    handoffStatus: "No handoff needed",
-    actionItems: ["Include parking map in confirmation"],
-    transcript: [
-      { speaker: "Waxwing Voice", time: "0:00", text: "That home is available now and allows scheduled evening tours." },
-      { speaker: "Caller", time: "3:11", text: "Great, Tuesday evening would be perfect." }
-    ]
-  },
-  {
-    id: "C-2836",
-    caller: "Tyler Brooks",
-    phone: "(737) 555-0188",
-    property: "1842 Cedar Ridge Dr",
-    intent: "Unknown",
-    time: "3h ago",
-    date: "Today",
-    duration: "1:32",
-    summary: "Asked about month-to-month options. Not a fit for current leasing rules.",
-    status: "Completed",
-    leadStatus: "Not qualified",
-    score: 28,
-    escalated: false,
-    booked: false,
-    followUpSent: false,
-    moveIn: "Jul 1",
-    budget: "$2,500",
-    unitPreference: "Flexible",
-    tourStatus: "Not booked",
-    booking: "No booking",
-    emailStatus: "Not sent",
-    handoffStatus: "No handoff needed",
-    actionItems: [],
-    transcript: [
-      { speaker: "Caller", time: "0:22", text: "Do you offer month-to-month leases?" },
-      { speaker: "Waxwing Voice", time: "0:48", text: "The available homes currently require a twelve-month lease." }
-    ]
-  },
-  {
-    id: "C-2835",
-    caller: "Aisha Nguyen",
-    phone: "(512) 555-0156",
-    property: "5520 Travis Heights Blvd",
-    intent: "Tour",
-    time: "4h ago",
-    date: "Today",
-    duration: "3:50",
-    summary: "Qualified family of four. Requested Sunday afternoon showing and school boundary details.",
-    status: "Completed",
-    leadStatus: "Qualified",
-    score: 84,
-    escalated: false,
-    booked: true,
-    followUpSent: true,
-    moveIn: "Jun 30",
-    budget: "$3,500",
-    unitPreference: "3 bed",
-    tourStatus: "Booked for Sun, May 10 at 2:00 PM",
-    booking: "Sun, May 10 at 2:00 PM",
-    emailStatus: "Confirmation sent",
-    handoffStatus: "No handoff needed",
-    actionItems: ["Send school boundary note"],
-    transcript: [
-      { speaker: "Caller", time: "0:31", text: "Can we see it this Sunday?" },
-      { speaker: "Waxwing Voice", time: "2:10", text: "Sunday at 2:00 PM is available." }
-    ]
-  }
-];
+function mapCallStatus(status: string): string {
+  if (status === "active") return "Live";
+  if (status === "completed") return "Completed";
+  if (status === "escalated") return "Escalated";
+  if (status === "abandoned") return "Abandoned";
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
 
-const leads: LeadRecord[] = calls
-  .filter((call) => call.leadStatus !== "Not qualified")
-  .map((call) => ({
-    id: call.id.replace("C", "L"),
-    name: call.caller,
-    phone: call.phone,
-    email: `${call.caller.split(" ")[0].toLowerCase()}@example.com`,
-    status: call.leadStatus,
-    moveIn: call.moveIn,
-    budget: call.budget,
-    unitPreference: call.unitPreference,
-    tourStatus: call.tourStatus,
-    lastSummary: call.summary,
-    lastCallId: call.id
-  }));
+function mapLeadStatusDisplay(status: string): string {
+  const map: Record<string, string> = {
+    new: "New",
+    contacted: "Contacted",
+    toured: "Toured",
+    applied: "Applied",
+    closed: "Closed",
+    lost: "Lost",
+  };
+  return map[status] ?? status;
+}
 
-const initialDocs: KnowledgeDoc[] = [
-  { id: "D-101", name: "leasing-criteria.pdf", status: "Indexed", uploaded: "Today, 8:10 AM" },
-  { id: "D-102", name: "cedar-ridge-factsheet.pdf", status: "Processing", uploaded: "Today, 9:22 AM" },
-  { id: "D-103", name: "old-fee-schedule.pdf", status: "Failed", uploaded: "Yesterday" }
-];
+function scoreFromTier(tier: string | null): number | null {
+  if (tier === "hot") return 90;
+  if (tier === "warm") return 60;
+  if (tier === "cold") return 30;
+  return null;
+}
 
-const propertyFacts = [
-  { label: "Rent range", value: "$1,875 - $3,200" },
-  { label: "Pet policy", value: "Cats and dogs vary by property" },
-  { label: "Credit requirement", value: "600 minimum, exceptions require handoff" },
-  { label: "Income rule", value: "3x monthly rent combined" },
-  { label: "Last indexed", value: "May 9, 2026 at 9:28 AM" }
-];
+function capitalize(s: string | null | undefined): string {
+  if (!s) return "Unknown";
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
 
-const navItems: Array<{ id: View; label: string; icon: LucideIcon; badge?: string }> = [
+// ---------------------------------------------------------------------------
+// Nav definitions (badges wired in Sidebar via props)
+// ---------------------------------------------------------------------------
+
+const navItemDefs: Array<{ id: View; label: string; icon: LucideIcon }> = [
   { id: "home", label: "Dashboard", icon: Home },
-  { id: "calls", label: "Calls", icon: Phone, badge: String(calls.length) },
-  { id: "leads", label: "Leads", icon: UsersRound, badge: String(leads.length) },
+  { id: "calls", label: "Calls", icon: Phone },
+  { id: "leads", label: "Leads", icon: UsersRound },
   { id: "knowledge", label: "Knowledge", icon: Database },
-  { id: "settings", label: "Settings", icon: Settings }
+  { id: "settings", label: "Settings", icon: Settings },
 ];
+
+// ---------------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------------
 
 export default function App() {
   const [view, setView] = useState<View>("home");
-  const [selectedCallId, setSelectedCallId] = useState(calls[0].id);
-  const [dataMode, setDataMode] = useState<DataMode>("ready");
-  const selectedCall = calls.find((call) => call.id === selectedCallId) ?? calls[0];
+  const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
+  const [dataMode, setDataMode] = useState<DataMode>("loading");
+
+  const [summary, setSummary] = useState<PropertySummary | null>(null);
+  const [calls, setCalls] = useState<CallListItem[]>([]);
+  const [leads, setLeads] = useState<LeadListItem[]>([]);
+  const [property, setProperty] = useState<PropertyDetail | null>(null);
+
+  useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    Promise.all([
+      getPropertySummary(PROPERTY_ID, today),
+      listCalls(PROPERTY_ID),
+      listLeads(PROPERTY_ID),
+      getProperty(PROPERTY_ID),
+    ])
+      .then(([sum, callsRes, leadsRes, prop]) => {
+        setSummary(sum);
+        setCalls(callsRes.items);
+        setLeads(leadsRes.items);
+        setProperty(prop);
+        setDataMode("ready");
+      })
+      .catch(() => setDataMode("error"));
+  }, []);
 
   const openCall = (callId: string) => {
     setSelectedCallId(callId);
     setView("call-detail");
   };
 
-  const title = view === "call-detail" ? "Call detail" : navItems.find((item) => item.id === view)?.label ?? "Dashboard";
+  const title =
+    view === "call-detail"
+      ? "Call detail"
+      : navItemDefs.find((item) => item.id === view)?.label ?? "Dashboard";
 
   return (
     <>
       <LiquidGlassFilters />
       <ForestBackground />
       <div className="app" data-sidebar="full" data-theme="light" data-density="comfortable">
-        <Sidebar active={view === "call-detail" ? "calls" : view} onNavigate={setView} />
+        <Sidebar
+          active={view === "call-detail" ? "calls" : view}
+          onNavigate={setView}
+          totalCalls={calls.length}
+          totalLeads={leads.length}
+        />
         <main className="main">
           <Topbar title={title} dataMode={dataMode} onDataModeChange={setDataMode} />
-          <StateGate mode={dataMode} view={title} onReset={() => setDataMode("ready")}>
-            {view === "home" && <HomeDashboard onOpenCall={openCall} />}
-            {view === "calls" && <CallsView onOpenCall={openCall} />}
-            {view === "call-detail" && <CallDetailView call={selectedCall} onBack={() => setView("calls")} />}
-            {view === "leads" && <LeadsView onOpenCall={openCall} />}
+          <StateGate mode={dataMode} view={title} onReset={() => window.location.reload()}>
+            {view === "home" && (
+              <HomeDashboard summary={summary} calls={calls} onOpenCall={openCall} onNavigate={setView} />
+            )}
+            {view === "calls" && <CallsView calls={calls} onOpenCall={openCall} />}
+            {view === "call-detail" && selectedCallId && (
+              <CallDetailView callId={selectedCallId} onBack={() => setView("calls")} />
+            )}
+            {view === "leads" && <LeadsView leads={leads} onOpenCall={openCall} />}
             {view === "knowledge" && <KnowledgeView />}
-            {view === "settings" && <SettingsView />}
+            {view === "settings" && <SettingsView property={property} />}
           </StateGate>
         </main>
       </div>
     </>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Shell
+// ---------------------------------------------------------------------------
 
 function LiquidGlassFilters() {
   return (
@@ -364,7 +223,27 @@ function ForestBackground() {
   );
 }
 
-function Sidebar({ active, onNavigate }: { active: View; onNavigate: (view: View) => void }) {
+function Sidebar({
+  active,
+  onNavigate,
+  totalCalls,
+  totalLeads,
+}: {
+  active: View;
+  onNavigate: (view: View) => void;
+  totalCalls: number;
+  totalLeads: number;
+}) {
+  const navItems = navItemDefs.map((item) => ({
+    ...item,
+    badge:
+      item.id === "calls" && totalCalls > 0
+        ? String(totalCalls)
+        : item.id === "leads" && totalLeads > 0
+        ? String(totalLeads)
+        : undefined,
+  }));
+
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -392,7 +271,7 @@ function Sidebar({ active, onNavigate }: { active: View; onNavigate: (view: View
         </div>
         <div className="agent-meta">
           <span className="inline-flex items-center gap-1">
-            <PhoneIncoming size={11} /> {calls.length} today
+            <PhoneIncoming size={11} /> {totalCalls} today
           </span>
           <span style={{ opacity: 0.5 }}>-</span>
           <span>v0.1</span>
@@ -405,7 +284,7 @@ function Sidebar({ active, onNavigate }: { active: View; onNavigate: (view: View
 function NavButton({
   item,
   active,
-  onNavigate
+  onNavigate,
 }: {
   item: { id: View; label: string; icon: LucideIcon; badge?: string };
   active: boolean;
@@ -426,22 +305,23 @@ function NavButton({
 function Topbar({
   title,
   dataMode,
-  onDataModeChange
+  onDataModeChange,
 }: {
   title: string;
   dataMode: DataMode;
   onDataModeChange: (mode: DataMode) => void;
 }) {
+  const apiUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
   return (
     <header className="topbar">
       <div className="topbar-title">
         <h1>{title}</h1>
-        <span className="greet">Today, May 9</span>
+        <span className="greet">Today, {new Date().toLocaleDateString("en-US", { month: "long", day: "numeric" })}</span>
       </div>
       <div className="topbar-actions">
-        <div className={API_BASE_URL ? "api-pill connected" : "api-pill"}>
+        <div className={apiUrl ? "api-pill connected" : "api-pill"}>
           <span className="dot" />
-          {API_BASE_URL || "API mock mode"}
+          {apiUrl ? apiUrl : "API mock mode"}
         </div>
         <select className="state-select" value={dataMode} onChange={(event) => onDataModeChange(event.target.value as DataMode)} aria-label="Preview data state">
           <option value="ready">Ready</option>
@@ -465,7 +345,7 @@ function StateGate({
   mode,
   view,
   onReset,
-  children
+  children,
 }: {
   mode: DataMode;
   view: string;
@@ -478,25 +358,25 @@ function StateGate({
     loading: {
       icon: Loader2,
       title: `Loading ${view.toLowerCase()}`,
-      message: "Fetching the latest dashboard data and preparing the workspace."
+      message: "Fetching the latest data from Waxwing backend.",
     },
     empty: {
       icon: Inbox,
       title: `No ${view.toLowerCase()} data yet`,
-      message: "This page is ready for the first records from Harsha's backend APIs."
+      message: "This page is ready — no records have been created yet.",
     },
     error: {
       icon: AlertTriangle,
       title: `Could not load ${view.toLowerCase()}`,
-      message: "The page keeps its failure state visible and gives the manager a clear retry path.",
-      action: "Retry"
+      message: "Could not reach the backend API. Check that it is running on port 8000.",
+      action: "Retry",
     },
     denied: {
       icon: ShieldAlert,
       title: "Permission required",
-      message: "Authenticated access can block this page without exposing private call or lead data.",
-      action: "Request access"
-    }
+      message: "Your token does not have access to this resource.",
+      action: "Request access",
+    },
   };
 
   const details = stateContent[mode];
@@ -520,25 +400,33 @@ function StateGate({
   );
 }
 
-function HomeDashboard({ onOpenCall }: { onOpenCall: (id: string) => void }) {
-  const qualified = calls.filter((call) => call.leadStatus === "Qualified").length;
-  const booked = calls.filter((call) => call.booked).length;
-  const escalated = calls.filter((call) => call.escalated).length;
-  const followUps = calls.filter((call) => call.followUpSent).length;
-  const actionItems = calls.reduce((total, call) => total + call.actionItems.length, 0);
+// ---------------------------------------------------------------------------
+// Home dashboard
+// ---------------------------------------------------------------------------
 
+function HomeDashboard({
+  summary,
+  calls,
+  onOpenCall,
+  onNavigate,
+}: {
+  summary: PropertySummary | null;
+  calls: CallListItem[];
+  onOpenCall: (id: string) => void;
+  onNavigate: (view: View) => void;
+}) {
   const kpis = [
-    { label: "Calls today", value: calls.length, delta: "+12%", icon: Phone, trend: [4, 5, 4, 6, 5, 7, 6] },
-    { label: "New leads", value: leads.length, delta: "+3", icon: UsersRound, trend: [2, 2, 3, 3, 4, 4, 5] },
-    { label: "Tours booked", value: booked, delta: "+5", icon: CalendarCheck, trend: [1, 1, 2, 2, 3, 4, 4] },
-    { label: "Escalated calls", value: escalated, delta: "-1", icon: ShieldAlert, trend: [3, 3, 2, 2, 1, 2, 1] },
-    { label: "Follow-ups sent", value: followUps, delta: "+4", icon: Send, trend: [1, 2, 2, 3, 4, 3, 4] },
-    { label: "Open action items", value: actionItems, delta: "+2", icon: Check, trend: [5, 4, 6, 5, 7, 8, 7] }
+    { label: "Calls today", value: summary?.calls_today ?? 0, delta: "+0%", icon: Phone, trend: [4, 5, 4, 6, 5, 7, summary?.calls_today ?? 0] },
+    { label: "New leads", value: summary?.new_leads_today ?? 0, delta: "+0", icon: UsersRound, trend: [2, 2, 3, 3, 4, 4, summary?.new_leads_today ?? 0] },
+    { label: "Tours booked", value: summary?.tours_booked_today ?? 0, delta: "+0", icon: CalendarCheck, trend: [1, 1, 2, 2, 3, 4, summary?.tours_booked_today ?? 0] },
+    { label: "Escalated calls", value: summary?.escalations_today ?? 0, delta: "+0", icon: ShieldAlert, trend: [3, 3, 2, 2, 1, 2, summary?.escalations_today ?? 0] },
+    { label: "Follow-ups sent", value: summary?.follow_ups_sent_today ?? 0, delta: "+0", icon: Send, trend: [1, 2, 2, 3, 4, 3, summary?.follow_ups_sent_today ?? 0] },
+    { label: "Open action items", value: summary?.open_action_items ?? 0, delta: "+0", icon: Check, trend: [5, 4, 6, 5, 7, 8, summary?.open_action_items ?? 0] },
   ];
 
   return (
     <section className="page stagger">
-      <HeroCard />
+      <HeroCard summary={summary} onNavigate={onNavigate} />
       <div className="kpi-grid">
         {kpis.map((kpi) => (
           <KpiCard key={kpi.label} {...kpi} />
@@ -546,18 +434,25 @@ function HomeDashboard({ onOpenCall }: { onOpenCall: (id: string) => void }) {
       </div>
       <div className="content-grid">
         <div className="card flat table-card">
-          <CardHeader title="Recent calls" subtitle={`${qualified} qualified leads - ${booked} tours booked`} />
-          <CallsTable rows={calls.slice(0, 5)} onOpenCall={onOpenCall} compact />
+          <CardHeader
+            title="Recent calls"
+            subtitle={`${summary?.calls_today ?? 0} calls today`}
+          />
+          {calls.length > 0 ? (
+            <CallsTable rows={calls.slice(0, 5)} onOpenCall={onOpenCall} compact />
+          ) : (
+            <InlineEmpty title="No calls recorded yet" />
+          )}
         </div>
         <div className="stack">
-          <ShowingsCard />
+          <RecentActivityCard calls={calls} />
         </div>
       </div>
     </section>
   );
 }
 
-function HeroCard() {
+function HeroCard({ summary, onNavigate }: { summary: PropertySummary | null; onNavigate: (view: View) => void }) {
   return (
     <div className="card hero-card">
       <svg className="hero-peaks" width="280" height="180" viewBox="0 0 280 180" fill="none" aria-hidden="true">
@@ -567,11 +462,20 @@ function HeroCard() {
       </svg>
       <div className="hero-content">
         <div>
-          <div className="eyebrow">Good afternoon, Hunter Property Management</div>
-          <h2>Waxwing Voice handled 8 calls today - 5 qualified.</h2>
-          <p>Three showings are booked for this weekend. Marcus Lee scored highest at 92.</p>
+          <div className="eyebrow">
+            {summary?.property_name ?? "Loading…"}
+          </div>
+          <h2>
+            Waxwing Voice handled {summary?.calls_today ?? 0} calls today
+            {summary && summary.new_leads_today > 0 ? ` — ${summary.new_leads_today} new leads captured.` : "."}
+          </h2>
+          <p>
+            {summary
+              ? `${summary.tours_booked_today} tour${summary.tours_booked_today !== 1 ? "s" : ""} booked. ${summary.escalations_today} escalation${summary.escalations_today !== 1 ? "s" : ""} today.`
+              : "Fetching metrics…"}
+          </p>
         </div>
-        <button className="btn primary">
+        <button className="btn primary" onClick={() => onNavigate("calls")}>
           Review queue <ChevronRight size={14} />
         </button>
       </div>
@@ -590,7 +494,7 @@ function KpiCard({
   value,
   delta,
   icon: Icon,
-  trend
+  trend,
 }: {
   label: string;
   value: number;
@@ -618,59 +522,63 @@ function KpiCard({
   );
 }
 
-function CallsView({ onOpenCall }: { onOpenCall: (id: string) => void }) {
-  const [query, setQuery] = useState("");
-  const [date, setDate] = useState("All");
-  const [property, setProperty] = useState("All");
-  const [intent, setIntent] = useState("All");
-  const [leadStatus, setLeadStatus] = useState("All");
-  const [special, setSpecial] = useState("All");
+// ---------------------------------------------------------------------------
+// Calls view
+// ---------------------------------------------------------------------------
 
-  const properties = unique(calls.map((call) => call.property));
+function CallsView({ calls, onOpenCall }: { calls: CallListItem[]; onOpenCall: (id: string) => void }) {
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("All");
+  const [intent, setIntent] = useState("All");
+  const [flag, setFlag] = useState("All");
+
   const filtered = calls.filter((call) => {
-    const text = `${call.caller} ${call.phone} ${call.property} ${call.summary}`.toLowerCase();
+    const text = `${call.caller_phone ?? ""} ${call.primary_intent ?? ""} ${call.summary ?? ""}`.toLowerCase();
     return (
       text.includes(query.toLowerCase()) &&
-      (date === "All" || call.date === date) &&
-      (property === "All" || call.property === property) &&
-      (intent === "All" || call.intent === intent) &&
-      (leadStatus === "All" || call.leadStatus === leadStatus) &&
-      (special === "All" ||
-        (special === "Booked" && call.booked) ||
-        (special === "Follow-up sent" && call.followUpSent) ||
-        (special === "Escalated" && call.escalated))
+      (status === "All" || call.status === status.toLowerCase()) &&
+      (intent === "All" || (call.primary_intent ?? "").toLowerCase() === intent.toLowerCase()) &&
+      (flag === "All" || (flag === "Escalated" && call.escalation_flag))
     );
   });
 
   return (
     <section className="page stack">
       <FiltersBar>
-        <SearchField value={query} onChange={setQuery} placeholder="Search caller, phone, property" />
-        <SelectField label="Date" value={date} onChange={setDate} options={["All", "Today", "Yesterday", "This week"]} />
-        <SelectField label="Property" value={property} onChange={setProperty} options={["All", ...properties]} />
+        <SearchField value={query} onChange={setQuery} placeholder="Search phone, intent, summary" />
+        <SelectField label="Status" value={status} onChange={setStatus} options={["All", "Active", "Completed", "Escalated", "Abandoned"]} />
         <SelectField label="Intent" value={intent} onChange={setIntent} options={["All", "Tour", "Availability", "Pricing", "Maintenance", "Unknown"]} />
-        <SelectField label="Lead" value={leadStatus} onChange={setLeadStatus} options={["All", "New", "Qualified", "Needs follow-up", "Not qualified"]} />
-        <SelectField label="Flag" value={special} onChange={setSpecial} options={["All", "Booked", "Follow-up sent", "Escalated"]} />
+        <SelectField label="Flag" value={flag} onChange={setFlag} options={["All", "Escalated"]} />
       </FiltersBar>
       <div className="card flat table-card">
         <CardHeader title="Call history" subtitle={`${filtered.length} matching calls`} />
-        {filtered.length ? <CallsTable rows={filtered} onOpenCall={onOpenCall} /> : <InlineEmpty title="No calls match those filters" />}
+        {filtered.length ? (
+          <CallsTable rows={filtered} onOpenCall={onOpenCall} />
+        ) : (
+          <InlineEmpty title="No calls match those filters" />
+        )}
       </div>
     </section>
   );
 }
 
-function CallsTable({ rows, onOpenCall, compact = false }: { rows: CallRecord[]; onOpenCall: (id: string) => void; compact?: boolean }) {
+function CallsTable({
+  rows,
+  onOpenCall,
+  compact = false,
+}: {
+  rows: CallListItem[];
+  onOpenCall: (id: string) => void;
+  compact?: boolean;
+}) {
   return (
     <table className="table">
       <thead>
         <tr>
           <th>Caller</th>
-          <th>Property</th>
           {!compact && <th>Intent</th>}
           <th>Status</th>
-          {!compact && <th>Summary</th>}
-          <th>Score</th>
+          {!compact && <th>Duration</th>}
           <th style={{ textAlign: "right" }}>Time</th>
         </tr>
       </thead>
@@ -679,26 +587,36 @@ function CallsTable({ rows, onOpenCall, compact = false }: { rows: CallRecord[];
           <tr key={call.id} onClick={() => onOpenCall(call.id)}>
             <td>
               <div className="person-cell">
-                <div className="avatar">{initials(call.caller)}</div>
+                <div className="avatar">{call.caller_phone ? call.caller_phone.slice(-4) : "??"}</div>
                 <div>
-                  <div className="strong">{call.caller}</div>
-                  <div className="mono subtext">{call.phone}</div>
+                  <div className="strong">{call.caller_phone ?? "Unknown"}</div>
+                  <div className="mono subtext">{capitalize(call.primary_intent)}</div>
                 </div>
               </div>
             </td>
-            <td>{call.property}</td>
-            {!compact && <td>{call.intent}</td>}
+            {!compact && <td>{capitalize(call.primary_intent)}</td>}
             <td>
               <div className="status-stack">
-                <StatusPill value={call.leadStatus} />
-                {call.escalated && <span className="pill warn">Escalated</span>}
+                <span
+                  className={`pill ${
+                    call.status === "completed"
+                      ? "success"
+                      : call.status === "active"
+                      ? "teal"
+                      : call.status === "escalated"
+                      ? "warn"
+                      : ""
+                  }`}
+                >
+                  {mapCallStatus(call.status)}
+                </span>
+                {call.escalation_flag && <span className="pill warn">Escalated</span>}
               </div>
             </td>
-            {!compact && <td className="summary-cell">{call.summary}</td>}
-            <td>{call.score == null ? "-" : <ScoreBar value={call.score} />}</td>
+            {!compact && <td className="mono">{formatDuration(call.duration)}</td>}
             <td style={{ textAlign: "right" }}>
-              <div>{call.time}</div>
-              <div className="mono subtext">{call.duration}</div>
+              <div>{formatRelativeTime(call.created_at)}</div>
+              <div className="mono subtext">{formatDuration(call.duration)}</div>
             </td>
           </tr>
         ))}
@@ -707,50 +625,96 @@ function CallsTable({ rows, onOpenCall, compact = false }: { rows: CallRecord[];
   );
 }
 
-function CallDetailView({ call, onBack }: { call: CallRecord; onBack: () => void }) {
+// ---------------------------------------------------------------------------
+// Call detail view (self-fetching)
+// ---------------------------------------------------------------------------
+
+function CallDetailView({ callId, onBack }: { callId: string; onBack: () => void }) {
+  const [call, setCall] = useState<CallDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    getCall(callId)
+      .then((data) => {
+        setCall(data);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, [callId]);
+
+  if (loading) {
+    return (
+      <section className="page stack">
+        <button className="btn ghost fit" onClick={onBack}>Back to calls</button>
+        <div className="state-card card">
+          <div className="state-icon spinning"><Loader2 size={28} /></div>
+          <div><h2>Loading call detail</h2><p>Fetching transcript and events…</p></div>
+        </div>
+      </section>
+    );
+  }
+
+  if (!call) {
+    return (
+      <section className="page stack">
+        <button className="btn ghost fit" onClick={onBack}>Back to calls</button>
+        <InlineEmpty title="Call not found" />
+      </section>
+    );
+  }
+
+  const extractedFields = Object.entries(call.lead_fields_extracted ?? {}).map<[string, string]>(
+    ([k, v]) => [capitalize(k.replace(/_/g, " ")), String(v)]
+  );
+
   return (
     <section className="page stack">
-      <button className="btn ghost fit" onClick={onBack}>
-        Back to calls
-      </button>
+      <button className="btn ghost fit" onClick={onBack}>Back to calls</button>
       <div className="detail-grid">
         <div className="stack">
           <div className="card">
-            <CardHeader title={call.caller} subtitle={`${call.phone} - ${call.property}`} />
-            <p className="detail-summary">{call.summary}</p>
+            <CardHeader
+              title={call.caller_phone ?? "Unknown caller"}
+              subtitle={`${mapCallStatus(call.status)} — ${formatDuration(call.duration)}`}
+            />
+            {call.summary && <p className="detail-summary">{call.summary}</p>}
             <div className="fact-grid">
-              <Fact label="Lead status" value={call.leadStatus} />
-              <Fact label="Intent" value={call.intent} />
-              <Fact label="Duration" value={call.duration} />
-              <Fact label="Handoff" value={call.handoffStatus} />
+              <Fact label="Status" value={mapCallStatus(call.status)} />
+              <Fact label="Intent" value={capitalize(call.primary_intent)} />
+              <Fact label="Duration" value={formatDuration(call.duration)} />
+              <Fact label="Sentiment" value={capitalize(call.sentiment)} />
             </div>
           </div>
           <div className="card">
             <CardHeader title="Transcript" subtitle="Speaker-separated call transcript" />
             <div className="transcript">
-              {call.transcript.map((line) => (
-                <div key={`${line.time}-${line.text}`} className={line.speaker === "Waxwing Voice" ? "transcript-line agent" : "transcript-line"}>
-                  <span className="mono">{line.time}</span>
-                  <strong>{line.speaker}</strong>
-                  <p>{line.text}</p>
-                </div>
-              ))}
+              {call.transcript_segments.length > 0 ? (
+                call.transcript_segments.map((seg) => (
+                  <div
+                    key={seg.id}
+                    className={seg.speaker === "agent" ? "transcript-line agent" : "transcript-line"}
+                  >
+                    <span className="mono">{formatDuration(Math.round(seg.timestamp))}</span>
+                    <strong>{seg.speaker === "agent" ? "Waxwing Voice" : "Caller"}</strong>
+                    <p>{seg.text}</p>
+                  </div>
+                ))
+              ) : (
+                <InlineEmpty title="No transcript available for this call" />
+              )}
             </div>
           </div>
         </div>
         <div className="stack">
-          <InfoCard title="Extracted lead fields" rows={[
-            ["Move-in", call.moveIn],
-            ["Budget", call.budget],
-            ["Unit preference", call.unitPreference],
-            ["Tour status", call.tourStatus]
-          ]} />
-          <InfoCard title="Related booking" rows={[["Booking", call.booking], ["Email", call.emailStatus]]} />
+          {extractedFields.length > 0 && (
+            <InfoCard title="Extracted lead fields" rows={extractedFields} />
+          )}
           <div className="card">
-            <CardHeader title="Action items" subtitle={`${call.actionItems.length} open`} />
-            {call.actionItems.length ? (
+            <CardHeader title="Action items" subtitle={`${(call.action_items ?? []).length} open`} />
+            {call.action_items?.length ? (
               <ul className="check-list">
-                {call.actionItems.map((item) => (
+                {call.action_items.map((item) => (
                   <li key={item}>
                     <Check size={14} /> {item}
                   </li>
@@ -760,25 +724,49 @@ function CallDetailView({ call, onBack }: { call: CallRecord; onBack: () => void
               <InlineEmpty title="No open action items" />
             )}
           </div>
+          {call.escalation_flag && (
+            <div className="card">
+              <CardHeader title="Escalation" subtitle={call.escalation_status ?? "Flagged for review"} />
+              <div className="fact-grid">
+                <Fact label="Status" value={call.escalation_status ?? "Pending"} />
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </section>
   );
 }
 
-function LeadsView({ onOpenCall }: { onOpenCall: (id: string) => void }) {
+// ---------------------------------------------------------------------------
+// Leads view
+// ---------------------------------------------------------------------------
+
+function LeadsView({ leads, onOpenCall }: { leads: LeadListItem[]; onOpenCall: (id: string) => void }) {
   const [status, setStatus] = useState("All");
+  const [score, setScore] = useState("All");
   const [query, setQuery] = useState("");
+
   const filtered = leads.filter((lead) => {
-    const text = `${lead.name} ${lead.phone} ${lead.email} ${lead.unitPreference}`.toLowerCase();
-    return text.includes(query.toLowerCase()) && (status === "All" || lead.status === status);
+    const text = `${lead.name ?? ""} ${lead.phone ?? ""} ${lead.email ?? ""} ${lead.desired_unit_type ?? ""}`.toLowerCase();
+    return (
+      text.includes(query.toLowerCase()) &&
+      (status === "All" || lead.lead_status === status.toLowerCase()) &&
+      (score === "All" || lead.lead_score === score.toLowerCase())
+    );
   });
 
   return (
     <section className="page stack">
       <FiltersBar>
         <SearchField value={query} onChange={setQuery} placeholder="Search leads" />
-        <SelectField label="Status" value={status} onChange={setStatus} options={["All", "New", "Qualified", "Needs follow-up"]} />
+        <SelectField
+          label="Status"
+          value={status}
+          onChange={setStatus}
+          options={["All", "New", "Contacted", "Toured", "Applied", "Closed", "Lost"]}
+        />
+        <SelectField label="Score" value={score} onChange={setScore} options={["All", "Hot", "Warm", "Cold"]} />
       </FiltersBar>
       <div className="card flat table-card">
         <CardHeader title="Leads" subtitle={`${filtered.length} active leads`} />
@@ -788,32 +776,44 @@ function LeadsView({ onOpenCall }: { onOpenCall: (id: string) => void }) {
               <tr>
                 <th>Lead</th>
                 <th>Status</th>
-                <th>Move-in</th>
-                <th>Budget</th>
-                <th>Unit</th>
-                <th>Tour</th>
-                <th>Last call</th>
+                <th>Score</th>
+                <th>Unit preference</th>
+                <th>Tour interest</th>
+                <th>Created</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((lead) => (
-                <tr key={lead.id} onClick={() => onOpenCall(lead.lastCallId)}>
+                <tr
+                  key={lead.id}
+                  onClick={() => lead.call_id && onOpenCall(lead.call_id)}
+                  style={{ cursor: lead.call_id ? "pointer" : "default" }}
+                >
                   <td>
                     <div className="person-cell">
-                      <div className="avatar">{initials(lead.name)}</div>
+                      <div className="avatar">{initials(lead.name ?? lead.phone ?? "?")}</div>
                       <div>
-                        <div className="strong">{lead.name}</div>
-                        <div className="mono subtext">{lead.phone}</div>
-                        <div className="subtext">{lead.email}</div>
+                        <div className="strong">{lead.name ?? "Unknown"}</div>
+                        <div className="mono subtext">{lead.phone ?? "—"}</div>
+                        <div className="subtext">{lead.email ?? "—"}</div>
                       </div>
                     </div>
                   </td>
-                  <td><StatusPill value={lead.status} /></td>
-                  <td>{lead.moveIn}</td>
-                  <td>{lead.budget}</td>
-                  <td>{lead.unitPreference}</td>
-                  <td>{lead.tourStatus}</td>
-                  <td className="summary-cell">{lead.lastSummary}</td>
+                  <td>
+                    <LeadStatusPill value={lead.lead_status} />
+                  </td>
+                  <td>
+                    {lead.lead_score
+                      ? <ScoreBar value={scoreFromTier(lead.lead_score) ?? 0} />
+                      : "—"}
+                  </td>
+                  <td>{lead.desired_unit_type ?? "—"}</td>
+                  <td>
+                    {lead.tour_interest
+                      ? <span className="pill success">Yes</span>
+                      : <span className="pill">No</span>}
+                  </td>
+                  <td className="subtext">{formatRelativeTime(lead.created_at)}</td>
                 </tr>
               ))}
             </tbody>
@@ -826,19 +826,41 @@ function LeadsView({ onOpenCall }: { onOpenCall: (id: string) => void }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Knowledge view (real upload)
+// ---------------------------------------------------------------------------
+
+type DocEntry = { id: string; name: string; status: string; uploaded: string };
+
 function KnowledgeView() {
-  const [docs, setDocs] = useState(initialDocs);
-  const [facts, setFacts] = useState(propertyFacts);
+  const [docs, setDocs] = useState<DocEntry[]>([]);
+  const [uploading, setUploading] = useState(false);
   const [processing, setProcessing] = useState(false);
 
-  const handleUpload = (event: ChangeEvent<HTMLInputElement>) => {
+  const handleUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    setDocs((current) => [
-      { id: `D-${Date.now()}`, name: file.name, status: "Processing", uploaded: "Just now" },
-      ...current
-    ]);
+    const tempId = `temp-${Date.now()}`;
+    setDocs((cur) => [{ id: tempId, name: file.name, status: "Processing", uploaded: "Just now" }, ...cur]);
+    setUploading(true);
     event.target.value = "";
+
+    try {
+      const result = await uploadDocument(PROPERTY_ID, file);
+      setDocs((cur) =>
+        cur.map((doc) =>
+          doc.id === tempId
+            ? { ...doc, id: result.document_id, status: result.processing_status === "indexed" ? "Indexed" : "Processing" }
+            : doc
+        )
+      );
+    } catch {
+      setDocs((cur) =>
+        cur.map((doc) => (doc.id === tempId ? { ...doc, status: "Failed" } : doc))
+      );
+    } finally {
+      setUploading(false);
+    }
   };
 
   const reindex = () => {
@@ -846,69 +868,80 @@ function KnowledgeView() {
     window.setTimeout(() => setProcessing(false), 900);
   };
 
+  const failedCount = docs.filter((d) => d.status === "Failed").length;
+
   return (
     <section className="page stack">
       <div className="knowledge-grid">
         <div className="card">
-          <CardHeader title="Property knowledge" subtitle="Structured facts Waxwing Voice can use on calls" />
-          <div className="editable-facts">
-            {facts.map((fact, index) => (
-              <label key={fact.label} className="field-label">
-                {fact.label}
-                <input
-                  className="field"
-                  value={fact.value}
-                  onChange={(event) => {
-                    const next = [...facts];
-                    next[index] = { ...fact, value: event.target.value };
-                    setFacts(next);
-                  }}
-                />
-              </label>
-            ))}
-          </div>
+          <CardHeader title="Property knowledge" subtitle="Documents uploaded here power Waxwing Voice on calls" />
           <div className="health-row">
-            <HealthIndicator label="Knowledge health" value="Good" tone="success" />
-            <HealthIndicator label="Failed docs" value={String(docs.filter((doc) => doc.status === "Failed").length)} tone="warn" />
+            <HealthIndicator label="Knowledge health" value={docs.length > 0 ? "Good" : "Empty"} tone="success" />
+            <HealthIndicator label="Failed docs" value={String(failedCount)} tone="warn" />
             <button className="btn primary" onClick={reindex}>
               <RefreshCw size={14} className={processing ? "spin" : ""} /> Re-index
             </button>
           </div>
         </div>
         <div className="card">
-          <CardHeader title="Document upload" subtitle="PDFs and property files for retrieval" />
+          <CardHeader title="Document upload" subtitle="PDFs, DOCX, and TXT files for retrieval" />
           <label className="upload-zone">
             <Upload size={22} />
-            <span>Choose a knowledge document</span>
-            <input type="file" onChange={handleUpload} />
+            <span>{uploading ? "Uploading…" : "Choose a knowledge document"}</span>
+            <input type="file" accept=".pdf,.docx,.txt" onChange={handleUpload} disabled={uploading} />
           </label>
-          <div className="doc-list">
-            {docs.map((doc) => (
-              <div key={doc.id} className="doc-row">
-                <FileText size={16} />
-                <div>
-                  <div className="strong">{doc.name}</div>
-                  <div className="subtext">{doc.uploaded}</div>
+          {docs.length > 0 && (
+            <div className="doc-list">
+              {docs.map((doc) => (
+                <div key={doc.id} className="doc-row">
+                  <FileText size={16} />
+                  <div>
+                    <div className="strong">{doc.name}</div>
+                    <div className="subtext">{doc.uploaded}</div>
+                  </div>
+                  <span className={`pill ${doc.status === "Indexed" ? "success" : doc.status === "Failed" ? "danger" : "warn"}`}>
+                    {doc.status}
+                  </span>
+                  <button
+                    className="btn icon ghost"
+                    aria-label={`Delete ${doc.name}`}
+                    onClick={() => setDocs((cur) => cur.filter((item) => item.id !== doc.id))}
+                  >
+                    <Trash2 size={14} />
+                  </button>
                 </div>
-                <span className={`pill ${doc.status === "Indexed" ? "success" : doc.status === "Failed" ? "danger" : "warn"}`}>{doc.status}</span>
-                <button className="btn icon ghost" aria-label={`Delete ${doc.name}`} onClick={() => setDocs((current) => current.filter((item) => item.id !== doc.id))}>
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
+          {docs.length === 0 && !uploading && (
+            <InlineEmpty title="No documents uploaded yet" />
+          )}
         </div>
       </div>
     </section>
   );
 }
 
-function SettingsView() {
-  const [hours, setHours] = useState("Mon-Fri 9:00 AM - 6:00 PM; Sat 10:00 AM - 3:00 PM");
-  const [contact, setContact] = useState("Hannah Walker - hannah@hunterpm.com - (512) 555-0100");
-  const [template, setTemplate] = useState("Thanks for calling Hunter Property Management. Your showing is confirmed for {{showing_time}} at {{property}}.");
+// ---------------------------------------------------------------------------
+// Settings view (live property data)
+// ---------------------------------------------------------------------------
+
+function SettingsView({ property }: { property: PropertyDetail | null }) {
+  const [hours, setHours] = useState("");
+  const [contact, setContact] = useState("");
+  const [rules, setRules] = useState("");
   const [voice, setVoice] = useState("Warm and concise");
-  const [rules, setRules] = useState("Escalate pricing exceptions, Fair Housing questions, application denials, and maintenance emergencies.");
+
+  useEffect(() => {
+    if (!property) return;
+    setHours(property.office_hours ? JSON.stringify(property.office_hours, null, 2) : "");
+    setContact(
+      property.escalation_contacts
+        ? property.escalation_contacts.map((c) => JSON.stringify(c)).join("\n")
+        : ""
+    );
+    setRules(property.leasing_policies ?? "");
+  }, [property]);
 
   return (
     <section className="page stack">
@@ -927,7 +960,7 @@ function SettingsView() {
             <Calendar size={18} />
             <div>
               <div className="strong">Google Calendar</div>
-              <div className="subtext">Connected to Hunter Property Management staging</div>
+              <div className="subtext">Connected to {property?.name ?? "property"}</div>
             </div>
             <span className="pill success">Connected</span>
           </div>
@@ -940,61 +973,57 @@ function SettingsView() {
             <option>Polished and formal</option>
           </select>
           <div className="preview-line">
-            <Mic size={14} /> Hi, thanks for calling Hunter Property Management. This is Waxwing Voice.
+            <Mic size={14} /> Hi, thanks for calling {property?.name ?? "the property"}. This is Waxwing Voice.
           </div>
-        </div>
-        <div className="card wide">
-          <CardHeader title="Email templates" subtitle="Used after confirmed bookings and follow-ups" />
-          <Textarea value={template} onChange={setTemplate} rows={4} />
         </div>
         <div className="card wide">
           <CardHeader title="Property-specific rules" subtitle="Rules the agent must respect before answering or booking" />
           <Textarea value={rules} onChange={setRules} rows={4} />
         </div>
+        {property?.description && (
+          <div className="card wide">
+            <CardHeader title="Property description" subtitle="Shown to the voice agent for context" />
+            <p style={{ fontSize: "0.875rem", color: "var(--ink-600)", lineHeight: 1.6 }}>{property.description}</p>
+          </div>
+        )}
       </div>
     </section>
   );
 }
 
-function ShowingsCard() {
-  const booked = calls.filter((call) => call.booked);
+// ---------------------------------------------------------------------------
+// Recent activity card (replaces ShowingsCard)
+// ---------------------------------------------------------------------------
+
+function RecentActivityCard({ calls }: { calls: CallListItem[] }) {
+  const recent = calls.slice(0, 4);
   return (
     <div className="card">
-      <CardHeader title="Upcoming showings" subtitle={`${booked.length} booked`} icon={Calendar} />
+      <CardHeader title="Recent activity" subtitle={`${calls.length} calls logged`} icon={Calendar} />
       <div className="stack small">
-        {booked.slice(0, 4).map((call) => {
-          const showing = parseShowingDate(call.booking);
-
-          return (
-            <div key={call.id} className="showing-row">
-              <div className="date-tile" aria-label={`${showing.weekday}, ${showing.month} ${showing.day}`}>
-                <span>{showing.weekday}</span>
-                <strong>{showing.day}</strong>
-                <em>{showing.month}</em>
-              </div>
-              <div>
-                <div className="strong">{call.caller}</div>
-                <div className="subtext">{call.property}</div>
-                <div className="subtext">{showing.time}</div>
-              </div>
+        {recent.map((call) => (
+          <div key={call.id} className="showing-row">
+            <div className="date-tile">
+              <span>{formatDateGroup(call.created_at).slice(0, 3)}</span>
+              <strong>{new Date(call.created_at).getDate()}</strong>
+              <em>{new Date(call.created_at).toLocaleString("en", { month: "short" })}</em>
             </div>
-          );
-        })}
+            <div>
+              <div className="strong">{call.caller_phone ?? "Unknown"}</div>
+              <div className="subtext">{capitalize(call.primary_intent)}</div>
+              <div className="subtext">{formatDuration(call.duration)}</div>
+            </div>
+          </div>
+        ))}
+        {recent.length === 0 && <InlineEmpty title="No calls yet today" />}
       </div>
     </div>
   );
 }
 
-function parseShowingDate(booking: string) {
-  const match = booking.match(/^(\w{3}),\s+(\w{3})\s+(\d{1,2})\s+at\s+(.+?)(?:\s+with\s+.+)?$/);
-
-  return {
-    weekday: match?.[1] ?? "Now",
-    month: match?.[2] ?? "",
-    day: match?.[3] ?? "",
-    time: match?.[4] ?? booking
-  };
-}
+// ---------------------------------------------------------------------------
+// Shared UI components
+// ---------------------------------------------------------------------------
 
 function FiltersBar({ children }: { children: ReactNode }) {
   return (
@@ -1074,9 +1103,16 @@ function HealthIndicator({ label, value, tone }: { label: string; value: string;
   );
 }
 
-function StatusPill({ value }: { value: LeadStatus }) {
-  const cls = value === "Qualified" ? "success" : value === "Not qualified" ? "danger" : value === "Needs follow-up" ? "warn" : "teal";
-  return <span className={`pill ${cls}`}>{value}</span>;
+function LeadStatusPill({ value }: { value: string }) {
+  const cls =
+    value === "toured" || value === "applied" || value === "closed"
+      ? "success"
+      : value === "lost"
+      ? "danger"
+      : value === "contacted"
+      ? "warn"
+      : "teal";
+  return <span className={`pill ${cls}`}>{mapLeadStatusDisplay(value)}</span>;
 }
 
 function ScoreBar({ value }: { value: number }) {
@@ -1137,14 +1173,15 @@ function WaxwingMark() {
   );
 }
 
-function unique(values: string[]) {
-  return Array.from(new Set(values));
-}
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
 
 function initials(name: string) {
   return name
     .split(" ")
     .map((part) => part[0])
     .join("")
-    .slice(0, 2);
+    .slice(0, 2)
+    .toUpperCase();
 }
