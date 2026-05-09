@@ -1,0 +1,121 @@
+{
+  "_comment": "Static fixture matching seed_property.py — use for frontend mock responses before backend endpoints are ready.",
+  "company": {
+    "id": "00000000-0000-0000-0000-000000000001",
+    "name": "Demo Property Management Co.",
+    "created_at": "2026-05-09T00:00:00Z",
+    "updated_at": "2026-05-09T00:00:00Z"
+  },
+  "user": {
+    "id": "00000000-0000-0000-0000-000000000002",
+    "company_id": "00000000-0000-0000-0000-000000000001",
+    "name": "Demo Admin",
+    "email": "admin@sunsetapartments.example",
+    "role": "admin",
+    "status": "active"
+  },
+  "property": {
+    "id": "00000000-0000-0000-0000-000000000003",
+    "company_id": "00000000-0000-0000-0000-000000000001",
+    "name": "Sunset Apartments",
+    "address": "123 Sunset Blvd, Austin, TX 78701",
+    "description": "Modern multifamily community in central Austin with 120 units.",
+    "amenities": {
+      "pool": true,
+      "gym": true,
+      "parking": "covered",
+      "pet_friendly": true,
+      "rooftop_deck": true,
+      "coworking_lounge": true
+    },
+    "office_hours": {
+      "mon_fri": "9:00 AM - 6:00 PM",
+      "sat": "10:00 AM - 4:00 PM",
+      "sun": "closed"
+    },
+    "leasing_policies": "12-month minimum lease. First and last month required at signing. Application fee $75. Credit check required. Minimum income 3x monthly rent.",
+    "maintenance_instructions": "Submit requests via the resident portal at residents.sunsetapts.example or call the emergency maintenance line at +15125550911.",
+    "escalation_contacts": [
+      {
+        "name": "Jane Smith",
+        "phone": "+15125550100",
+        "role": "Property Manager",
+        "email": "jane@sunsetapts.example"
+      },
+      {
+        "name": "Bob Torres",
+        "phone": "+15125550911",
+        "role": "Emergency Maintenance",
+        "available": "24/7"
+      }
+    ],
+    "business_hour_rules": {
+      "timezone": "America/Chicago",
+      "after_hours_start": "18:00",
+      "after_hours_end": "09:00"
+    },
+    "call_handling_rules": {
+      "after_hours_message": "Thank you for calling Sunset Apartments. Our office is currently closed. For emergencies, press 1. To leave a leasing inquiry, press 2.",
+      "escalate_after_seconds": 45
+    }
+  },
+  "knowledge_chunks": [
+    {
+      "id": "00000000-0000-0000-0000-000000000004",
+      "property_id": "00000000-0000-0000-0000-000000000003",
+      "chunk_text": "Pet Policy: Pets are welcome at Sunset Apartments. We accept cats and dogs up to 75 lbs. Breed restrictions apply (no Pit Bulls, Rottweilers, or Dobermans). Monthly pet rent is $50 per pet. Non-refundable pet fee of $300.",
+      "source_label": "Leasing Policies & Pet Rules, p.2",
+      "page_number": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000005",
+      "property_id": "00000000-0000-0000-0000-000000000003",
+      "chunk_text": "Parking: Covered parking is included with every unit at no additional cost. One spot per unit. Guest parking is available on the surface lot on a first-come, first-served basis.",
+      "source_label": "Community Amenities Guide, p.5",
+      "page_number": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000006",
+      "property_id": "00000000-0000-0000-0000-000000000003",
+      "chunk_text": "Unit Pricing (as of May 2026): Studio — $1,450/month. 1 Bedroom — $1,750/month. 2 Bedroom — $2,200/month. Prices subject to availability and may vary by floor and view.",
+      "source_label": "Current Rent Roll, May 2026",
+      "page_number": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000007",
+      "property_id": "00000000-0000-0000-0000-000000000003",
+      "chunk_text": "Lease Terms: Standard lease is 12 months. 6-month leases available at a $150/month premium. Month-to-month available after initial lease at $250/month premium with 60-day notice required.",
+      "source_label": "Leasing Policies & Pet Rules, p.1",
+      "page_number": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000008",
+      "property_id": "00000000-0000-0000-0000-000000000003",
+      "chunk_text": "Move-In Requirements: First month's rent, last month's rent, and a security deposit equal to one month's rent are due at lease signing. Acceptable payment methods: certified check, money order, or ACH transfer.",
+      "source_label": "Leasing Policies & Pet Rules, p.3",
+      "page_number": null
+    }
+  ],
+  "sample_api_responses": {
+    "GET /v1/properties/00000000-0000-0000-0000-000000000003": {
+      "id": "00000000-0000-0000-0000-000000000003",
+      "company_id": "00000000-0000-0000-0000-000000000001",
+      "name": "Sunset Apartments",
+      "address": "123 Sunset Blvd, Austin, TX 78701",
+      "description": "Modern multifamily community in central Austin with 120 units.",
+      "amenities": {"pool": true, "gym": true, "parking": "covered"},
+      "office_hours": {"mon_fri": "9:00 AM - 6:00 PM", "sat": "10:00 AM - 4:00 PM"},
+      "leasing_policies": "12-month minimum lease.",
+      "maintenance_instructions": "Submit requests via the resident portal.",
+      "escalation_contacts": [{"name": "Jane Smith", "phone": "+15125550100", "role": "Property Manager"}],
+      "created_at": "2026-05-09T00:00:00Z",
+      "updated_at": "2026-05-09T00:00:00Z"
+    },
+    "GET /v1/calls/ (empty)": {
+      "items": [],
+      "total": 0,
+      "page": 1,
+      "page_size": 20
+    }
+  }
+}

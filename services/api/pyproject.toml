@@ -1,0 +1,91 @@
+[project]
+name = "waxwing-api"
+version = "0.1.0"
+description = "Waxwing Voice backend API — property data, voice tools, RAG, and workflow automation"
+requires-python = ">=3.12"
+dependencies = [
+    # Web framework — [standard] pulls in uvicorn, python-multipart, httpx, email-validator
+    "fastapi[standard]>=0.115",
+    # Pydantic v2 for schemas; pydantic-settings for typed env var loading
+    "pydantic>=2.10",
+    "pydantic-settings>=2.6",
+    # ORM, migrations, async PostgreSQL driver, sync driver for Alembic CLI
+    "sqlalchemy>=2.0.36",
+    "alembic>=1.14",
+    "asyncpg>=0.30",
+    "psycopg2-binary>=2.9",
+    # pgvector SQLAlchemy column type for embeddings
+    "pgvector>=0.3.6",
+    # File uploads (also included via fastapi[standard], explicit for clarity)
+    "python-multipart>=0.0.12",
+    # S3-compatible object storage
+    "boto3>=1.35",
+    # .env file loading for local development
+    "python-dotenv>=1.0",
+    # JWT authentication
+    "PyJWT>=2.9",
+    # Rate limiting
+    "slowapi>=0.1.9",
+    # Document parsing for RAG pipeline (Phase 3)
+    "pdfplumber>=0.11",
+    "python-docx>=1.1",
+    "openai>=1.0",
+    # Google Calendar integration (Phase 4)
+    "google-auth>=2.36",
+    "google-auth-oauthlib>=1.2",
+    "google-api-python-client>=2.155",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+# ---------------------------------------------------------------------------
+# Ruff — replaces Black + Flake8 + isort
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501",  # line too long — handled by formatter
+    "B008",  # Depends(...) in FastAPI function defaults is the canonical pattern
+    "UP046", # Generic subclass syntax — existing schemas use Generic[T], not changing
+    "UP042", # StrEnum — existing voice_tools schemas use str+Enum; not changing
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+filterwarnings = ["error"]
