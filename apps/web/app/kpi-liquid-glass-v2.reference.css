@@ -1,0 +1,31 @@
+/*
+  ReactBits-style backdrop-filter KPI attempt, kept by request for rollback.
+  Not imported by the app.
+
+  Markup reference:
+    <LiquidGlassBackdropFilter />
+    <span className="kpi-liquid-highlight" aria-hidden="true" />
+*/
+
+.kpi {
+  --ripple-x: 50%;
+  --ripple-y: 50%;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.08) 44%, rgba(196, 230, 230, 0.10)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.05));
+  border: 1px solid rgba(255, 255, 255, 0.54);
+  -webkit-backdrop-filter: url("#kpi-liquid-glass-filter") saturate(1.65) brightness(1.10) contrast(1.08);
+  backdrop-filter: url("#kpi-liquid-glass-filter") saturate(1.65) brightness(1.10) contrast(1.08);
+}
+
+.kpi-liquid-highlight {
+  position: absolute;
+  inset: -28%;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    radial-gradient(closest-side at 18% 12%, rgba(255, 255, 255, 0.62), transparent 45%),
+    radial-gradient(closest-side at 82% 86%, rgba(6, 62, 70, 0.16), transparent 55%),
+    linear-gradient(116deg, transparent 18%, rgba(255, 255, 255, 0.54) 31%, rgba(255, 255, 255, 0.08) 38%, transparent 50%, rgba(70, 160, 170, 0.16) 68%, transparent 78%);
+}
