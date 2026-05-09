@@ -2,9 +2,6 @@
 
 These schemas are the contract between Harsha's backend and Akhil's voice agent.
 Every field has an example value so the OpenAPI docs are self-explanatory.
-
-NEEDS AKHIL REVIEW: CallEventType enum — confirm the full list of event types
-  that the voice agent will emit before Phase 1 starts.
 """
 
 import uuid
@@ -78,7 +75,7 @@ class PropertyProfileResponse(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "property_id": "a1b2c3d4-0000-0000-0000-000000000001",
+                "id": "a1b2c3d4-0000-0000-0000-000000000001",
                 "name": "Sunset Apartments",
                 "address": "123 Sunset Blvd, Austin, TX 78701",
                 "amenities": {"pool": True, "gym": True, "parking": "covered"},
@@ -91,7 +88,7 @@ class PropertyProfileResponse(BaseModel):
         }
     )
 
-    property_id: uuid.UUID
+    id: uuid.UUID
     name: str
     address: str | None
     description: str | None
@@ -163,7 +160,6 @@ class CreateOrUpdateLeadResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-# NEEDS AKHIL REVIEW: confirm this list matches every event the voice agent emits
 class CallEventType(str, Enum):
     call_started = "call_started"
     call_ended = "call_ended"

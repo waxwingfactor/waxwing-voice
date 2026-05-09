@@ -4,8 +4,12 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
+from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlalchemy.pool import NullPool
+
+# Load .env so `uv run alembic upgrade head` works without pre-setting env vars
+load_dotenv()
 
 # Import Base so that all models register with the metadata.
 # The __init__.py re-exports all model classes — Alembic sees every table.
