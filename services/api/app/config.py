@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     environment: str = "local"
     secret_key: str = "dev-secret-key"
     embedding_dimensions: int = 1536
+    openai_api_key: str = ""
 
 
 @lru_cache

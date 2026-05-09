@@ -5,6 +5,7 @@ Mount order:
     /v1/calls       -> app.api.calls
     /v1/voice       -> app.api.voice
     /v1/leads       -> app.api.leads
+    /v1/documents   -> app.api.documents
 
 Run locally:
     cd services/api && uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
@@ -14,7 +15,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import calls, leads, properties, voice
+from app.api import calls, documents, leads, properties, voice
 from app.config import get_settings
 from app.database import APIError
 
@@ -72,6 +73,7 @@ app.include_router(properties.router, prefix="/v1")
 app.include_router(calls.router, prefix="/v1")
 app.include_router(voice.router, prefix="/v1")
 app.include_router(leads.router, prefix="/v1")
+app.include_router(documents.router, prefix="/v1")
 
 
 # ---------------------------------------------------------------------------

@@ -23,9 +23,11 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
+from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.database import APIError, get_company_id, get_db
 from app.models.audit_log import AuditLog
 from app.models.booking import Booking
@@ -35,6 +37,7 @@ from app.models.email_record import EmailRecord
 from app.models.lead import Lead
 from app.models.property import Property
 from app.models.transcript_segment import TranscriptSegment
+from app.rag.embedder import embed_texts
 from app.schemas.voice_tools import (
     AvailableSlot,
     BookTourRequest,
@@ -45,6 +48,7 @@ from app.schemas.voice_tools import (
     CreateCallEventResponse,
     CreateOrUpdateLeadRequest,
     CreateOrUpdateLeadResponse,
+    KnowledgeResult,
     RequestHandoffRequest,
     RequestHandoffResponse,
     SaveCallSummaryRequest,
@@ -85,11 +89,62 @@ async def search_knowledge(
         404 PROPERTY_NOT_FOUND — property_id not in company scope.
     """
     await _get_property_or_404(db, body.property_id, company_id)
-    # Phase 3: embed body.query, run pgvector similarity search filtered by property_id
+
+    settings = get_settings()
+    api_key = settings.openai_api_key
+
+    # Graceful degradation: if no API key is configured, return empty results
+    # so the voice agent can still function without a knowledge base.
+    if not api_key:
+        return SearchKnowledgeResponse(
+            property_id=body.property_id,
+            query=body.query,
+            results=[],
+        )
+
+    # Embed the query text — embed_texts returns [[float, ...]]
+    vectors = await embed_texts([body.query], api_key)
+    query_vec = vectors[0]
+
+    # Format the vector as the "[0.1, 0.2, ...]" string expected by pgvector.
+    query_vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
+
+    # ⚠ Multi-tenant safety: WHERE clause always scopes by BOTH property_id AND
+    # company_id to prevent cross-tenant data leakage.
+    stmt = sa_text("""
+        SELECT id, chunk_text, source_label, page_number,
+               1 - (embedding <=> CAST(:query_vec AS vector)) AS similarity_score
+        FROM knowledge_chunks
+        WHERE property_id = CAST(:property_id AS uuid)
+          AND company_id = CAST(:company_id AS uuid)
+        ORDER BY embedding <=> CAST(:query_vec AS vector)
+        LIMIT :top_k
+    """)
+    result = await db.execute(
+        stmt,
+        {
+            "query_vec": query_vec_str,
+            "property_id": str(body.property_id),
+            "company_id": str(company_id),
+            "top_k": body.top_k,
+        },
+    )
+    rows = result.mappings().all()
+
+    results = [
+        KnowledgeResult(
+            chunk_text=r["chunk_text"],
+            source_label=r["source_label"],
+            page_number=r["page_number"],
+            similarity_score=max(0.0, min(1.0, float(r["similarity_score"]))),
+        )
+        for r in rows
+    ]
+
     return SearchKnowledgeResponse(
         property_id=body.property_id,
         query=body.query,
-        results=[],
+        results=results,
     )
 
 
