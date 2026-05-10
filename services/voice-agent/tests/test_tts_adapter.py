@@ -325,19 +325,22 @@ class TestElevenLabsTTSAdapterStreaming:
 
 
 # ---------------------------------------------------------------------------
-# 4. VoiceSession._tts_speak integration
+# 4. VoiceSession barge-in (handle_barge_in) — _tts_speak removed (Low 2 fix)
 # ---------------------------------------------------------------------------
+# _tts_speak was a dead stub (TTS now handled by VoicePipelineAgent).
+# Tests for _tts_speak are removed. handle_barge_in tests are kept because
+# the method is still part of the public interface (test compatibility).
 
 
-class TestVoiceSessionTTSSpeak:
+class TestVoiceSessionBargeIn:
     """
-    VoiceSession._tts_speak delegates to the injected TTSAdapter.
-    Uses MockTTSAdapter — no backend, no ElevenLabs network call.
+    VoiceSession.handle_barge_in() forwards cancel to the injected TTSAdapter
+    when one is present. In production, _tts_adapter is None and it is a no-op.
     """
 
     def _make_session(self, tts_adapter: TTSAdapter) -> object:
         """Build a minimal VoiceSession with a mock backend client."""
-        from unittest.mock import AsyncMock, MagicMock
+        from unittest.mock import MagicMock
         from voice_agent.agent.session import VoiceSession
         from voice_agent.tools.backend_client import BackendClient
 
@@ -351,51 +354,8 @@ class TestVoiceSessionTTSSpeak:
         return session
 
     @pytest.mark.asyncio
-    async def test_tts_speak_delegates_to_adapter(self) -> None:
-        """_tts_speak calls synthesize_streaming on the injected adapter."""
-        adapter = MockTTSAdapter(chunks_per_utterance=3)
-        session = self._make_session(adapter)
-
-        await session._tts_speak("Welcome to Maple Grove Apartments.")
-
-        assert adapter.synthesize_call_count == 1
-        assert adapter.last_synthesized_text == "Welcome to Maple Grove Apartments."
-
-    @pytest.mark.asyncio
-    async def test_tts_speak_with_mock_does_not_raise(self) -> None:
-        """Happy path: MockTTSAdapter produces chunks, no exception propagates."""
-        adapter = MockTTSAdapter(chunks_per_utterance=4)
-        session = self._make_session(adapter)
-        # Should complete without raising
-        await session._tts_speak("Our office is open Monday through Friday.")
-
-    @pytest.mark.asyncio
-    async def test_tts_speak_retries_on_retryable_failure(self) -> None:
-        """On a retryable TTSProviderError, _tts_speak retries once."""
-        adapter = MockTTSAdapter(fail_on_next=True, fail_retryable=True, chunks_per_utterance=2)
-        session = self._make_session(adapter)
-
-        # First call fails (fail_on_next=True), retry succeeds.
-        # After the fail_on_next is consumed, the second attempt yields normally.
-        await session._tts_speak("Let me check that for you.")
-
-        # synthesize_call_count: 1 (failed) + 1 (retry) = 2
-        assert adapter.synthesize_call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_tts_speak_does_not_raise_on_non_retryable_failure(self) -> None:
-        """Non-retryable failure increments tool_failure_count but does not propagate."""
-        adapter = MockTTSAdapter(fail_on_next=True, fail_retryable=False)
-        session = self._make_session(adapter)
-
-        # Must not raise — voice call must continue without audio
-        await session._tts_speak("I can answer that question.")
-
-        assert session.state.tool_failure_count == 1
-
-    @pytest.mark.asyncio
     async def test_handle_barge_in_calls_adapter_cancel(self) -> None:
-        """handle_barge_in() must call the TTS adapter's cancel()."""
+        """handle_barge_in() must call the TTS adapter's cancel() when injected."""
         adapter = MockTTSAdapter()
         session = self._make_session(adapter)
 
@@ -404,31 +364,41 @@ class TestVoiceSessionTTSSpeak:
         assert adapter.cancel_call_count == 1
 
     @pytest.mark.asyncio
-    async def test_session_uses_elevenlabs_adapter_by_default(self) -> None:
-        """When no tts_adapter is injected, session builds an ElevenLabsTTSAdapter."""
+    async def test_handle_barge_in_no_adapter_is_noop(self) -> None:
+        """handle_barge_in() is a no-op when _tts_adapter is None (production path)."""
+        from unittest.mock import MagicMock
         from voice_agent.agent.session import VoiceSession
-        from voice_agent.providers.tts.elevenlabs import ElevenLabsTTSAdapter
         from voice_agent.tools.backend_client import BackendClient
 
         mock_client = MagicMock(spec=BackendClient)
+        session = VoiceSession(
+            property_id="00000000-0000-0000-0000-000000000001",
+            jwt_token="test-jwt",
+            backend_client=mock_client,
+            tts_adapter=None,  # production: no adapter injected
+        )
+        # Must not raise
+        await session.handle_barge_in()
 
-        # Patch the lru_cache'd get_settings in config module so that
-        # ElevenLabsTTSAdapter gets a non-empty api_key and doesn't raise.
-        # The import inside __init__ is `from voice_agent.config import get_settings`,
-        # so the target is voice_agent.config.get_settings.
-        mock_settings = MagicMock()
-        mock_settings.elevenlabs_api_key = "fake-key-for-test"
-        mock_settings.elevenlabs_voice_id = "EXAVITQu4vr4xnSDxMaL"
+    @pytest.mark.asyncio
+    async def test_session_has_no_tts_adapter_by_default(self) -> None:
+        """
+        Low 3 fix regression test: when no tts_adapter is injected, _tts_adapter
+        must be None (not an ElevenLabsTTSAdapter). The adapter construction has
+        been removed from VoiceSession.__init__ — TTS is handled by VPA.
+        """
+        from unittest.mock import MagicMock
+        from voice_agent.agent.session import VoiceSession
+        from voice_agent.tools.backend_client import BackendClient
 
-        with patch("voice_agent.config.get_settings", return_value=mock_settings):
-            session = VoiceSession(
-                property_id="00000000-0000-0000-0000-000000000001",
-                jwt_token="test-jwt",
-                backend_client=mock_client,
-                # No tts_adapter — triggers default construction path
-            )
+        mock_client = MagicMock(spec=BackendClient)
+        session = VoiceSession(
+            property_id="00000000-0000-0000-0000-000000000001",
+            jwt_token="test-jwt",
+            backend_client=mock_client,
+        )
 
-        assert isinstance(session._tts_adapter, ElevenLabsTTSAdapter)
+        assert session._tts_adapter is None
 
 
 # ---------------------------------------------------------------------------

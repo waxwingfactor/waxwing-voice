@@ -51,20 +51,25 @@ The compose file is well-formed; this is a local env issue, not a code issue. Co
 
 **Impact:** Voice agent can call the route safely; conversation flow needs to handle empty-results gracefully (prompt fallback language, escalation if knowledge is required). Already covered by `system_prompt.py` "say I do not have that information" rules.
 
-## 5. RESOLVED — Provider credentials (Phase 1 finish-up complete, 2026-05-09)
+## 5. RESOLVED — Provider credentials and custom STT/LLM/TTS adapters (2026-05-09)
 
-**Resolution:** All three provider adapters are now implemented with the mock/real pattern:
+**Resolution (updated in Deepgram refactor, branch feature/akhil-deepgram-pipeline-refactor):**
 
-- `_tts_speak`: **IMPLEMENTED** — `ElevenLabsTTSAdapter` (requires `ELEVENLABS_API_KEY`) or `MockTTSAdapter` (`TTS_PROVIDER=mock`)
-- `_stt_transcribe`: **IMPLEMENTED** — `WhisperSTTAdapter` (requires `WHISPER_API_KEY`) or `MockSTTAdapter` (`STT_PROVIDER=mock`)
-- `_llm_respond`: **IMPLEMENTED** — `GeminiLLMAdapter` (requires `GEMINI_API_KEY`) or `MockLLMAdapter` (`LLM_PROVIDER=mock`)
+The pipeline now uses the LiveKit Agents `VoicePipelineAgent` pattern (ADR-0006).
+Custom provider adapters are replaced by official LiveKit plugins:
+
+- **STT:** `livekit-plugins-deepgram` with `nova-2-phonecall` model (ADR-0005)
+- **LLM:** `livekit-plugins-google` with Gemini 2.0 Flash
+- **TTS:** `livekit-plugins-elevenlabs` with ElevenLabs Turbo v2.5
+- **VAD:** `livekit-plugins-silero` (bundled with livekit-agents)
 
 **Required env vars for production (Subbu to provision):**
+- `DEEPGRAM_API_KEY` — Deepgram API key (ADR-0005; key already in staging .env)
 - `ELEVENLABS_API_KEY` — ElevenLabs API key from the team account
 - `ELEVENLABS_VOICE_ID` — optional; defaults to Bella (`EXAVITQu4vr4xnSDxMaL`)
-- `WHISPER_API_KEY` — OpenAI API key for hosted Whisper transcription
 - `GEMINI_API_KEY` — Google Gemini API key for Gemini-2.0 Flash
 - `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` — LiveKit Cloud project (ADR-0004)
+- `VOICE_AGENT_JWT` — see §7 below
 
 **Local dev without API keys (fully supported):**
 
@@ -72,9 +77,9 @@ The compose file is well-formed; this is a local env issue, not a code issue. Co
 STT_PROVIDER=mock LLM_PROVIDER=mock TTS_PROVIDER=mock python -m voice_agent
 ```
 
-No network calls, no keys needed. All 9 call scenarios exercise correctly in this mode.
-
-**Remaining gap:** `livekit-agents>=0.10` is declared in `pyproject.toml` but not installed in the venv (network not available during this session). The package must be installed (`uv sync`) before the worker can connect to LiveKit. All unit tests pass without it because `voice_agent/worker/` uses try/except import guards.
+**Remaining gap:** `uv sync` must be run to install `livekit-plugins-deepgram`,
+`livekit-plugins-google`, `livekit-plugins-silero`. All unit tests pass without them
+because the worker uses try/except import guards (offline mode).
 
 ## 6. Design follow-ups from Phase 2 (Akhil — small, do before Phase 5)
 
@@ -106,21 +111,20 @@ c) **`captured_fields` → `CallState.lead_fields` sync is manual in tests.** `V
 
 **Action:** Resolve before declaring Phase 1 done in staging. Default TTL from `create_access_token()` is 24h — even option 1 works for MVP if Subbu provisions rotation.
 
-## 8. Audio resampling in Harsha's backend (new — Phase 1 finish-up, 2026-05-09)
+## 8. RESOLVED — Audio resampling in backend bridge (2026-05-09, Deepgram refactor)
 
-**Where:** `services/api/app/` — Harsha's `/ws/twilio/media` WebSocket bridge (ADR-0004).
+**Resolution:** The bridge is now implemented in `services/api/app/bridge/` (not Harsha's
+responsibility — Akhil wrote it, hosted in Harsha's service directory).
 
-**Issue:** Twilio Media Streams delivers audio as mu-law encoded at 8kHz. The voice-agent's `WhisperSTTAdapter` expects 16kHz 16-bit PCM. Resampling is Harsha's responsibility (boundary: he owns the bridge). Standard options:
+- `services/api/app/bridge/audio_codec.py` — pure-Python mu-law encode/decode + numpy-based
+  8kHz ↔ 16kHz resampling. No `audioop`. No `scipy`. Works on Python 3.13.
+- `services/api/app/bridge/livekit_bridge.py` — full bridge lifecycle: room creation,
+  caller audio track publication, agent audio return path.
+- `services/api/app/api/twilio_webhooks.py` — TODO stubs replaced with real bridge wiring.
 
-- **`audioop.ulaw2lin` + `audioop.ratecv`** — Python stdlib (available in Python 3.12, deprecated in 3.13). Simple, no extra deps.
-- **`numpy` + linear interpolation** — more control, already a common indirect dependency.
-- **`scipy.signal.resample`** — higher-quality resampling, adds a dep to Harsha's service.
+**New deps added to `services/api/pyproject.toml`:** `livekit>=0.18.0`, `livekit-api>=0.7.0`, `numpy>=1.26.0`.
 
-**Recommendation for Harsha:** `audioop` is simplest for MVP. If Python 3.13 migration is planned, switch to `numpy` resampling before that.
-
-**Impact on voice-agent:** None — the voice-agent sees 16kHz PCM from LiveKit regardless of how Harsha resampled it. This blocker is documented here for cross-team awareness.
-
-**Owner:** Harsha (backend bridge). Subbu to verify Python version in staging before `audioop` is used.
+**Subbu must run `uv sync` in `services/api/` to install new deps.**
 
 ---
 
@@ -138,7 +142,38 @@ Architecture decisions that affect this file's blocker landscape:
 - [ADR-0002](../../docs/adr/0002-resend-replaces-sendgrid.md) — Resend replaces SendGrid. No voice-agent code change; email provider is invisible to this service.
 - [ADR-0003](../../docs/adr/0003-local-deployment-for-mvp-demo.md) — Local deployment for MVP demo. Cloudflare Tunnel provides the public Twilio webhook URL. Docker Compose provides the database. Subbu owns the demo runbook.
 - [ADR-0004](../../docs/adr/0004-twilio-livekit-bridge-architecture.md) — Twilio→LiveKit bridge. Backend bridges Twilio Media Streams into LiveKit rooms; voice-agent runs as a LiveKit Agents worker. Accepted 2026-05-09.
+- [ADR-0005](../../docs/adr/0005-deepgram-replaces-whisper.md) — Deepgram nova-2-phonecall replaces Whisper (STT). Streaming-first, ~150ms TTFT. Accepted 2026-05-09.
+- [ADR-0006](../../docs/adr/0006-voice-pipeline-agent-pattern.md) — VoicePipelineAgent pattern. Framework-idiomatic orchestration replaces custom worker code. Accepted 2026-05-09.
 
 ---
 
-**Last updated:** 2026-05-09 (Phase 1 finish-up: STT/LLM/TTS adapters implemented; ADR-0004 accepted; §5 provider-credentials resolved; §8 audio resampling blocker added for Harsha)
+## 9. NEW — uv sync required after Deepgram refactor (2026-05-09)
+
+**Where:** `services/voice-agent/` and `services/api/`.
+
+**Issue:** New deps declared in `pyproject.toml` are not yet installed in local venvs.
+
+**services/voice-agent/ — new deps:**
+- `livekit-plugins-deepgram>=0.6.0` (replaces faster-whisper, ADR-0005)
+- `livekit-plugins-silero>=0.6.0` (VAD, ADR-0006)
+- `livekit-plugins-google>=0.2.0` (replaces google-generativeai, ADR-0006)
+
+**services/api/ — new deps:**
+- `livekit>=0.18.0` (rtc package for bridge audio tracks)
+- `livekit-api>=0.7.0` (server SDK for room management and token minting)
+- `numpy>=1.26.0` (mu-law codec and resampling in bridge)
+
+**Fix (Subbu):**
+```
+cd services/voice-agent && uv sync
+cd services/api && uv sync
+```
+
+**Impact:** Until synced, the worker runs in offline/stub mode (no livekit-agents import).
+All 624 unit tests pass without these packages.
+
+**Owner:** Subbu (environment provisioning).
+
+---
+
+**Last updated:** 2026-05-09 (Deepgram pipeline refactor — ADR-0005/0006; §5 updated; §8 resolved; §9 added for uv sync requirement)

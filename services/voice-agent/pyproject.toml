@@ -8,21 +8,21 @@ version = "0.1.0"
 description = "Waxwing Voice: real-time voice pipeline for property management"
 requires-python = ">=3.12"
 dependencies = [
-    # Telephony bridge (Twilio webhook parsing) — Phase 1 will add twilio SDK
+    # Telephony bridge (Twilio webhook parsing)
     "twilio>=9.0.0",
-    # Voice orchestration — LiveKit Agents framework (ADR-0004: Twilio→LiveKit bridge)
+    # Voice orchestration — LiveKit Agents framework (ADR-0004, ADR-0006)
     "livekit-agents>=0.10",
+    # STT — Deepgram nova-2-phonecall via official LiveKit plugin (ADR-0005)
+    # Replaces faster-whisper. streaming-first, ~150ms TTFT, telephony-tuned.
+    "livekit-plugins-deepgram>=0.6.0",
+    # VAD — Silero VAD, bundled with LiveKit Agents but listed explicitly.
+    "livekit-plugins-silero>=0.6.0",
+    # LLM — Gemini Flash via official LiveKit plugin (ADR-0006)
+    # Replaces google-generativeai direct SDK.
+    "livekit-plugins-google>=0.2.0",
     # TTS — ElevenLabs Turbo v2.5 via official LiveKit plugin (ADR-0001)
-    # livekit-plugins-elevenlabs provides the LiveKit Agents TTS integration.
-    # ElevenLabsTTSAdapter also uses httpx directly for streaming — no extra dep.
     "livekit-plugins-elevenlabs>=0.3.0",
-    # STT — Whisper via openai-whisper or faster-whisper (Phase 1 decision)
-    # Using faster-whisper for lower latency; locked to Whisper model family
-    "faster-whisper>=1.0.0",
-    # LLM — Gemini-3.0 Flash via Google Generative AI SDK
-    "google-generativeai>=0.8.0",
     # HTTP client for backend tool calls (Harsha's FastAPI endpoints)
-    # Also used by ElevenLabsTTSAdapter for streaming TTS WebSocket calls.
     "httpx>=0.27.0",
     # Pydantic v2 for call state models and tool payload validation
     "pydantic>=2.7.0",

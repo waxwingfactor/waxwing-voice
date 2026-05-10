@@ -483,21 +483,8 @@ class TestScenario6Silence:
         result = await session.handle_caller_turn(" ")
         assert "escalated" in result
 
-    @pytest.mark.asyncio
-    async def test_stt_empty_result_is_final(self) -> None:
-        """WhisperSTTAdapter yields TranscriptionEvent(text='') for empty audio."""
-        from voice_agent.providers.stt.whisper import WhisperSTTAdapter
-
-        adapter = WhisperSTTAdapter(api_key="sk-test")
-
-        async def _empty_audio():
-            return
-            yield  # async generator
-
-        events = [e async for e in adapter.transcribe_streaming(_empty_audio())]
-        assert len(events) == 1
-        assert events[0].text == ""
-        assert events[0].is_final is True
+    # test_stt_empty_result_is_final removed — WhisperSTTAdapter deleted (ADR-0005:
+    # Deepgram via livekit-plugins-deepgram is the STT provider; Whisper is gone).
 
     @pytest.mark.asyncio
     async def test_handle_silence_timeout_does_not_raise(self) -> None:
@@ -582,29 +569,11 @@ class TestScenario7BackendFailure:
         assert result["escalated"]
         assert result["escalation_reason"] == EscalationReason.BACKEND_TOOL_FAILURE.value
 
-    @pytest.mark.asyncio
-    async def test_tts_retryable_failure_does_not_propagate(self) -> None:
-        """A retryable TTS failure increments failure count but the call continues."""
-        tts = MockTTSAdapter(fail_on_next=True, fail_retryable=True, chunks_per_utterance=2)
-        session = _make_session(tts=tts)
-        await _start_session(session)
-
-        # _tts_speak retries once on retryable failure. Second attempt succeeds.
-        # After the fail is consumed by retry, synthesize_call_count == 2
-        await session._tts_speak("Testing retry behaviour.")
-        assert tts.synthesize_call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_non_retryable_tts_failure_increments_failure_count(self) -> None:
-        """Non-retryable TTS failure increments tool_failure_count without retrying."""
-        tts = MockTTSAdapter(fail_on_next=True, fail_retryable=False)
-        session = _make_session(tts=tts)
-        await _start_session(session)
-
-        await session._tts_speak("This will fail permanently.")
-        # Only 1 attempt (no retry on non-retryable)
-        assert tts.synthesize_call_count == 1
-        assert session.state.tool_failure_count == 1
+    # Low 2 fix: test_tts_retryable_failure_does_not_propagate and
+    # test_non_retryable_tts_failure_increments_failure_count removed.
+    # _tts_speak was a dead stub (TTS is handled by VoicePipelineAgent).
+    # The tests are replaced by handle_barge_in tests in TestVoiceSessionBargeIn
+    # (test_tts_adapter.py) and by the new test_entrypoint_callbacks.py suite.
 
 
 # ---------------------------------------------------------------------------

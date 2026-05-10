@@ -38,6 +38,28 @@ class PropertyDetailResponse(BaseModel):
     updated_at: datetime
 
 
+class PropertyUpdateRequest(BaseModel):
+    """Partial update payload for PATCH /v1/properties/{id}.
+
+    All fields are Optional — only fields the client sends are applied.
+    Use ``model_dump(exclude_unset=True)`` to determine which fields the
+    client explicitly set (vs. left as default None).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    address: str | None = None
+    description: str | None = None
+    amenities: dict[str, Any] | None = None
+    office_hours: dict[str, Any] | None = None
+    leasing_policies: str | None = None
+    maintenance_instructions: str | None = None
+    escalation_contacts: list[dict[str, Any]] | None = None
+    business_hour_rules: dict[str, Any] | None = None
+    call_handling_rules: dict[str, Any] | None = None
+
+
 class PropertySummaryResponse(BaseModel):
     """Aggregated metrics for the home dashboard tiles.
 

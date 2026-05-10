@@ -9,14 +9,16 @@ Endpoints:
     GET   /v1/calls/{call_id}  -> full call detail with transcript + events
 """
 
+import logging
 import uuid
 from datetime import date as date_type
 
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy import Date, cast, func, select
+from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy import Date, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import APIError, get_company_id, get_db
+from app.limiter import limiter
 from app.models.call import Call
 from app.models.call_event import CallEvent
 from app.models.property import Property
@@ -35,6 +37,8 @@ from app.schemas.calls import (
     TranscriptSegment as TranscriptSegmentSchema,
 )
 from app.schemas.pagination import PaginatedResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
@@ -175,9 +179,16 @@ async def update_call(
 
 
 @router.get("/", response_model=PaginatedResponse[CallListItem])
+@limiter.limit("60/minute")
 async def list_calls(
+    request: Request,
     property_id: uuid.UUID = Query(..., description="Filter by property (required)"),
     status: str | None = Query(default=None, description="Filter by call status"),
+    q: str | None = Query(
+        default=None,
+        max_length=200,
+        description="Substring search across caller_phone and summary (case-insensitive)",
+    ),
     date_from: str | None = Query(default=None, description="YYYY-MM-DD — inclusive start"),
     date_to: str | None = Query(default=None, description="YYYY-MM-DD — inclusive end"),
     page: int = Query(1, ge=1),
@@ -190,13 +201,16 @@ async def list_calls(
     Consumer Notes (Alex — dashboard):
         - Always pass `property_id` — cross-property call lists are not supported.
         - `date_from` / `date_to` filter on `created_at` (UTC date).
+        - `q` performs a case-insensitive SUBSTRING match across `caller_phone`
+          and `summary`. This is NOT a full-text search; for relevance-ranked
+          full-text retrieval, Phase 5+ may add a Postgres `tsvector` index.
         - Results are ordered newest-first.
 
     Errors:
         404 PROPERTY_NOT_FOUND — property_id not in company scope.
 
     Example:
-        GET /v1/calls/?property_id=...&status=completed&page=1
+        GET /v1/calls/?property_id=...&status=completed&q=512&page=1
     """
     # Verify property belongs to this company
     prop_result = await db.execute(
@@ -218,6 +232,14 @@ async def list_calls(
     ]
     if status is not None:
         filters.append(Call.status == status)
+    if q is not None and q.strip():
+        pattern = f"%{q.strip()}%"
+        filters.append(
+            or_(
+                Call.caller_phone.ilike(pattern),
+                Call.summary.ilike(pattern),
+            )
+        )
     if date_from is not None:
         try:
             filters.append(cast(Call.created_at, Date) >= date_type.fromisoformat(date_from))
@@ -243,6 +265,16 @@ async def list_calls(
         .limit(page_size)
     )
     calls = result.scalars().all()
+
+    if total > 0:
+        logger.info(
+            "list_calls property_id=%s company_id=%s total=%d page=%d q=%r",
+            property_id,
+            company_id,
+            total,
+            page,
+            q,
+        )
 
     return PaginatedResponse[CallListItem](
         items=[CallListItem.model_validate(c) for c in calls],

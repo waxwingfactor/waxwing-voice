@@ -1,20 +1,18 @@
 """
 LLM (Large Language Model) provider adapters.
 
-Stack decision: Gemini-2.0 Flash (locked per docs/03-tooling-and-guardrails.md).
-Direct REST via httpx — no google-generativeai SDK to keep dependencies lean.
+Stack decision (ADR-0006): Gemini-2.0 Flash via livekit-plugins-google is the
+locked LLM provider. The VoicePipelineAgent handles all LLM calls internally;
+the direct GeminiLLMAdapter (httpx REST) has been removed.
 
-Adapter pattern mirrors voice_agent/providers/tts/ and voice_agent/providers/stt/:
+Remaining:
   - protocol.py  — LLMAdapter protocol + Message type
-  - gemini.py    — GeminiLLMAdapter using Google Gemini REST API via httpx
   - mock.py      — MockLLMAdapter for tests: deterministic, no network calls
 
-Usage::
-
-    from voice_agent.providers.llm import GeminiLLMAdapter, MockLLMAdapter, LLMAdapter
+MockLLMAdapter is retained because test_phase1_scenarios.py uses it to drive
+VoiceSession conversation flows without a live LLM provider.
 """
 
-from voice_agent.providers.llm.gemini import GeminiLLMAdapter
 from voice_agent.providers.llm.mock import MockLLMAdapter
 from voice_agent.providers.llm.protocol import LLMAdapter, LLMProviderError, Message
 
@@ -22,6 +20,5 @@ __all__ = [
     "LLMAdapter",
     "LLMProviderError",
     "Message",
-    "GeminiLLMAdapter",
     "MockLLMAdapter",
 ]

@@ -7,18 +7,22 @@ Endpoints:
     GET /v1/leads/{lead_id}  -> full lead detail
 """
 
+import logging
 import uuid
 from datetime import date as date_type
 
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy import Date, cast, func, select
+from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy import Date, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import APIError, get_company_id, get_db
+from app.limiter import limiter
 from app.models.lead import Lead
 from app.models.property import Property
 from app.schemas.leads import LeadDetailResponse, LeadListItem
 from app.schemas.pagination import PaginatedResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 
@@ -29,7 +33,9 @@ router = APIRouter(prefix="/leads", tags=["leads"])
 
 
 @router.get("/", response_model=PaginatedResponse[LeadListItem])
+@limiter.limit("60/minute")
 async def list_leads(
+    request: Request,
     property_id: uuid.UUID = Query(..., description="Filter by property (required)"),
     lead_score: str | None = Query(default=None, description="hot | warm | cold"),
     lead_status: str | None = Query(
@@ -37,6 +43,11 @@ async def list_leads(
         description="new | contacted | toured | applied | closed | lost",
     ),
     tour_interest: bool | None = Query(default=None, description="Filter by tour interest flag"),
+    q: str | None = Query(
+        default=None,
+        max_length=200,
+        description="Substring search across name, phone, email (case-insensitive)",
+    ),
     date_from: str | None = Query(default=None, description="YYYY-MM-DD — inclusive start"),
     date_to: str | None = Query(default=None, description="YYYY-MM-DD — inclusive end"),
     page: int = Query(1, ge=1),
@@ -49,13 +60,16 @@ async def list_leads(
     Consumer Notes (Alex — dashboard):
         - Always pass `property_id` — cross-property lead lists are not supported.
         - `date_from` / `date_to` filter on `created_at` (UTC date).
+        - `q` performs a case-insensitive SUBSTRING match across `name`, `phone`,
+          and `email`. This is NOT a full-text search; for relevance-ranked
+          full-text retrieval, Phase 5+ may add a Postgres `tsvector` index.
         - Results are ordered newest-first.
 
     Errors:
         404 PROPERTY_NOT_FOUND — property_id not in company scope.
 
     Example:
-        GET /v1/leads/?property_id=...&lead_score=hot&page=1
+        GET /v1/leads/?property_id=...&lead_score=hot&q=jane&page=1
     """
     prop_result = await db.execute(
         select(Property).where(
@@ -80,6 +94,15 @@ async def list_leads(
         filters.append(Lead.lead_status == lead_status)
     if tour_interest is not None:
         filters.append(Lead.tour_interest == tour_interest)
+    if q is not None and q.strip():
+        pattern = f"%{q.strip()}%"
+        filters.append(
+            or_(
+                Lead.name.ilike(pattern),
+                Lead.phone.ilike(pattern),
+                Lead.email.ilike(pattern),
+            )
+        )
     if date_from is not None:
         try:
             filters.append(cast(Lead.created_at, Date) >= date_type.fromisoformat(date_from))
@@ -105,6 +128,16 @@ async def list_leads(
         .limit(page_size)
     )
     leads = result.scalars().all()
+
+    if total > 0:
+        logger.info(
+            "list_leads property_id=%s company_id=%s total=%d page=%d q=%r",
+            property_id,
+            company_id,
+            total,
+            page,
+            q,
+        )
 
     return PaginatedResponse[LeadListItem](
         items=[LeadListItem.model_validate(lead) for lead in leads],

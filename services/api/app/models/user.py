@@ -23,3 +23,8 @@ class User(UUIDMixin, TimestampMixin, Base):
     role: Mapped[str] = mapped_column(String(50), nullable=False, default="manager")
     # Values: active | inactive
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")
+
+    # bcrypt hash produced by passlib.hash.bcrypt — never store plaintext.
+    # Nullable to allow legacy / SSO-only users that have never set a password.
+    # See alembic/versions/0004_add_user_password_hash.py.
+    password_hash: Mapped[str | None] = mapped_column(String(255))

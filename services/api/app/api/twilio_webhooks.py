@@ -179,9 +179,16 @@ async def incoming_call(
         caller_phone=caller_phone or None,
         started_at=datetime.now(UTC).isoformat(),
         status="active",
+        # Medium 4 fix: set livekit_room_id now (= call UUID) so DB column is not NULL.
+        # The bridge names the LiveKit room after the call UUID, so setting it here
+        # means the DB and the bridge agree without needing a later UPDATE. Dashboard
+        # joins on livekit_room_id will work immediately after call creation.
+        # NOTE: call.id is set by the DB on flush, so this line runs AFTER flush below.
     )
     db.add(call)
     await db.flush()
+    # Medium 4 fix (continued): set livekit_room_id after flush so call.id is available.
+    call.livekit_room_id = str(call.id)
 
     logger.info("Created Call record: call_id=%s twilio_call_sid=%s", call.id, call_sid)
 
@@ -367,7 +374,7 @@ async def incoming_call_fallback(request: Request) -> Response:
 
 
 async def twilio_media_stream(websocket: WebSocket) -> None:
-    """Bridge Twilio's bidirectional Media Streams protocol to the voice agent.
+    """Bridge Twilio's bidirectional Media Streams protocol to the LiveKit room.
 
     Registered directly on the FastAPI `app` in main.py (not via APIRouter)
     because WebSocket routes do not propagate cleanly through include_router
@@ -377,28 +384,51 @@ async def twilio_media_stream(websocket: WebSocket) -> None:
 
     Message events handled:
         connected — stream established; logged for observability.
-        start     — stream metadata including custom parameters injected by
-                    the TwiML; extracts call_id and caller_phone.
-        media     — base64-encoded mulaw audio chunk from the caller.
-        dtmf      — DTMF digit pressed by the caller.
-        stop      — stream ended by Twilio; signal agent to finalise.
+        start     — stream metadata (streamSid, callSid) plus custom parameters
+                    injected by the TwiML (call_id, caller_phone). Initialises the
+                    LiveKitBridge, which creates the room and publishes caller audio.
+        media     — base64-encoded PCMU audio chunk from the caller; forwarded
+                    to LiveKit via the bridge (mu-law decode → 16 kHz PCM → LiveKit).
+        dtmf      — DTMF digit pressed by the caller; logged for observability.
+        stop      — stream ended by Twilio; bridge is closed, room disconnected.
 
-    Consumer Notes (Akhil — voice agent):
-        - Replace the TODO(akhil) markers with real agent integration.
-        - "start" is the right moment to initialise the agent session.
-          Pass: stream_sid, call_id, caller_phone, and this websocket so the
-          agent can send audio back on the same connection.
-        - "media" payloads are raw mulaw at 8 kHz, base64-encoded.
-        - The agent should write TTS audio back to Twilio by sending a JSON
-          message of the form:
-              {"event": "media", "streamSid": "<sid>",
-               "media": {"payload": "<base64-mulaw>"}}
+    Architecture (ADR-0004, ADR-0006):
+        The bridge creates a per-call LiveKit room named by the call_id UUID.
+        Room metadata contains: call_id, twilio_call_sid, property_id.
+        The voice-agent worker (services/voice-agent/) connects to the same room,
+        reads the metadata, and subscribes to the "caller-audio" track.
+
+        Design choice (Akhil, 2026-05-09):
+            The incoming_call webhook creates the Call record and passes call_id
+            as a TwiML Stream parameter. The bridge reads call_id from the "start"
+            event and sets it in the LiveKit room metadata. The voice-agent reads
+            call_id from room metadata and does NOT create a second call record,
+            eliminating the duplicate Call record bug (backend issue #3).
 
     Args:
         websocket: The FastAPI WebSocket connection accepted from Twilio.
     """
     await websocket.accept()
+
+    settings = get_settings()
     call_id: str | None = None
+    bridge = None
+
+    # Only instantiate bridge if LiveKit is configured. If not configured (e.g.
+    # local dev without LiveKit), log and continue in stub mode so the webhook
+    # still accepts and logs Twilio events without crashing.
+    if settings.livekit_url and settings.livekit_api_key and settings.livekit_api_secret:
+        from app.bridge.livekit_bridge import LiveKitBridge
+        bridge = LiveKitBridge(
+            livekit_url=settings.livekit_url,
+            livekit_api_key=settings.livekit_api_key,
+            livekit_api_secret=settings.livekit_api_secret,
+        )
+    else:
+        logger.warning(
+            "LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET not configured — "
+            "bridge running in stub mode. Set these env vars to enable real-time audio."
+        )
 
     try:
         async for message in websocket.iter_text():
@@ -409,28 +439,50 @@ async def twilio_media_stream(websocket: WebSocket) -> None:
                 logger.info("Twilio media stream connected")
 
             elif event == "start":
-                stream_sid: str = data["start"]["streamSid"]
-                custom_params: dict = data["start"].get("customParameters", {})
+                start_payload = data.get("start", {})
+                stream_sid: str = start_payload.get("streamSid", "")
+                # The actual Twilio CallSid (CA...) — different from the stream SID.
+                twilio_call_sid: str = start_payload.get("callSid", "")
+                custom_params: dict = start_payload.get("customParameters", {})
                 call_id = custom_params.get("call_id")
-                # caller_phone is extracted here for the voice agent to consume.
-                _caller_phone: str | None = custom_params.get("caller_phone")
-                logger.info("Stream started: stream_sid=%s call_id=%s", stream_sid, call_id)
-                # TODO(akhil): initialize voice agent session here
-                # Pass: stream_sid, call_id, _caller_phone, websocket
+                caller_phone: str | None = custom_params.get("caller_phone")
+
+                logger.info(
+                    "Stream started: stream_sid=%s call_id=%s twilio_call_sid=%s",
+                    stream_sid,
+                    call_id,
+                    twilio_call_sid,
+                )
+
+                if bridge is not None and call_id:
+                    await bridge.handle_start(
+                        data,
+                        websocket,
+                        call_id=call_id,
+                        property_id=settings.default_property_id,
+                        caller_phone=caller_phone,
+                    )
+                elif bridge is not None and not call_id:
+                    logger.warning(
+                        "Stream start missing call_id in customParameters — "
+                        "bridge will not connect. Check TwiML Stream parameter configuration."
+                    )
 
             elif event == "media":
-                # base64-encoded mulaw audio — consumed by the voice agent (see TODO below).
-                _payload: str = data["media"]["payload"]
-                # TODO(akhil): send audio payload to voice agent for STT processing
-                # The voice agent reads this and sends back TTS audio
+                if bridge is not None:
+                    await bridge.handle_media(data)
 
             elif event == "dtmf":
-                digit: str = data["dtmf"]["digit"]
+                digit: str = data.get("dtmf", {}).get("digit", "")
                 logger.info("DTMF received: digit=%s call_id=%s", digit, call_id)
+                if bridge is not None:
+                    await bridge.handle_dtmf(data)
 
             elif event == "stop":
                 logger.info("Stream stopped for call_id=%s", call_id)
-                # Signal voice agent to finalise and save summary (Akhil's responsibility)
+                if bridge is not None:
+                    await bridge.close()
+                    bridge = None
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected for call_id=%s", call_id)
@@ -438,3 +490,5 @@ async def twilio_media_stream(websocket: WebSocket) -> None:
         logger.exception("Error in media stream for call_id=%s", call_id)
     finally:
         logger.info("Media stream closed for call_id=%s", call_id)
+        if bridge is not None:
+            await bridge.close()

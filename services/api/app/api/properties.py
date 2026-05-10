@@ -1,28 +1,39 @@
 """Property endpoints — consumed by Alex (dashboard) and Akhil (get_property_profile tool).
 
-Auth: X-Company-Id header (Phase 1 placeholder — UUID trusted as-is).
+Auth: Bearer JWT (see app.database.get_company_id).
 
 Endpoints:
-    GET  /v1/properties/                      -> paginated property list
-    GET  /v1/properties/{property_id}         -> full property detail
-    GET  /v1/properties/{property_id}/summary -> aggregated daily metrics
+    GET   /v1/properties/                      -> paginated property list
+    GET   /v1/properties/{property_id}         -> full property detail
+    PATCH /v1/properties/{property_id}         -> partial update of property fields
+    GET   /v1/properties/{property_id}/summary -> aggregated daily metrics
 """
 
+import logging
 import uuid
 from datetime import date as date_type
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import Date, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import APIError, get_company_id, get_db
+from app.limiter import limiter
+from app.models.audit_log import AuditLog
 from app.models.booking import Booking
 from app.models.call import Call
 from app.models.email_record import EmailRecord
 from app.models.lead import Lead
 from app.models.property import Property
 from app.schemas.pagination import PaginatedResponse
-from app.schemas.properties import PropertyDetailResponse, PropertyListItem, PropertySummaryResponse
+from app.schemas.properties import (
+    PropertyDetailResponse,
+    PropertyListItem,
+    PropertySummaryResponse,
+    PropertyUpdateRequest,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/properties", tags=["properties"])
 
@@ -96,6 +107,80 @@ async def get_property(
         X-Company-Id: <company-uuid>
     """
     prop = await _get_property_or_404(db, property_id, company_id)
+    return PropertyDetailResponse.model_validate(prop)
+
+
+# ---------------------------------------------------------------------------
+# PATCH /properties/{property_id}
+# ---------------------------------------------------------------------------
+
+
+@router.patch("/{property_id}", response_model=PropertyDetailResponse)
+@limiter.limit("30/minute")
+async def update_property(
+    request: Request,
+    property_id: uuid.UUID,
+    body: PropertyUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    company_id: uuid.UUID = Depends(get_company_id),
+) -> PropertyDetailResponse:
+    """Partially update a property's profile fields.
+
+    Only the fields the client explicitly sends in the JSON body are applied;
+    omitted fields are left untouched. This is naturally idempotent — repeating
+    the same PATCH request produces the same final state.
+
+    Consumer Notes (Alex — dashboard):
+        - Send only the fields you want to change.
+        - The full updated property is returned in the response.
+        - Field ``escalation_contacts`` accepts a list of contact dicts.
+
+    Audit:
+        Writes one ``PROPERTY_UPDATED`` row to ``audit_logs`` whose ``metadata``
+        records the names of the fields that were changed (no PII / values).
+
+    Errors:
+        404 PROPERTY_NOT_FOUND — property not in company scope.
+        422 INVALID_REQUEST    — payload contains unknown fields or wrong types.
+
+    Example:
+        PATCH /v1/properties/{id}
+        {"name": "Sunset Apartments — Phase 2", "amenities": {"pool": false}}
+    """
+    prop = await _get_property_or_404(db, property_id, company_id)
+
+    # Only fields the client explicitly set (model_dump skips defaults).
+    changes = body.model_dump(exclude_unset=True)
+
+    if not changes:
+        # No-op: nothing to update. Return current state without writing audit log.
+        return PropertyDetailResponse.model_validate(prop)
+
+    for attr, value in changes.items():
+        setattr(prop, attr, value)
+
+    await db.flush()
+
+    audit = AuditLog(
+        company_id=company_id,
+        property_id=prop.id,
+        actor_type="USER",
+        actor_id=str(company_id),
+        action="PROPERTY_UPDATED",
+        entity_type="property",
+        entity_id=str(prop.id),
+        metadata_={"fields_changed": sorted(changes.keys())},
+    )
+    db.add(audit)
+    await db.flush()
+
+    logger.info(
+        "Property %s updated by company %s; fields_changed=%s",
+        prop.id,
+        company_id,
+        sorted(changes.keys()),
+    )
+
     return PropertyDetailResponse.model_validate(prop)
 
 

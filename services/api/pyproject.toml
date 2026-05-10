@@ -24,6 +24,8 @@ dependencies = [
     "python-dotenv>=1.0",
     # JWT authentication
     "PyJWT>=2.9",
+    # Password hashing for the auth login endpoint (bcrypt backend).
+    "passlib[bcrypt]>=1.7.4",
     # Rate limiting
     "slowapi>=0.1.9",
     # Document parsing for RAG pipeline (Phase 3)
@@ -36,6 +38,13 @@ dependencies = [
     "google-api-python-client>=2.155",
     # Twilio — inbound call webhooks, TwiML generation, and signature validation (Phase 5)
     "twilio>=9.0",
+    # LiveKit server SDK — used by the Twilio→LiveKit bridge to create rooms and tokens.
+    # NOT the same as livekit-agents (which lives in services/voice-agent/).
+    "livekit>=0.18.0",
+    "livekit-api>=0.7.0",
+    # numpy — pure-Python mu-law codec tables + 8kHz↔16kHz resampling in the bridge.
+    # No audioop (removed from Python 3.13 stdlib). No scipy needed for 2:1 integer ratio.
+    "numpy>=1.26.0",
 ]
 
 [dependency-groups]

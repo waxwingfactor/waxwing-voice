@@ -4,34 +4,37 @@ Application configuration loaded from environment variables.
 All secrets come from environment variables — never hardcoded here.
 See services/voice-agent/.env.example for the canonical variable list.
 
-Stack decisions:
-  - TTS: ElevenLabs Turbo v2.5 (ADR-0001, replaces VibeVoice)
-  - Email: Resend via backend (ADR-0002, no voice-agent config needed)
-  - Deployment: Local + Cloudflare Tunnel for MVP demo (ADR-0003)
-
-Phase 0: defines the shape; Phase 1 adds provider validation.
+Stack decisions (locked per docs/03-tooling-and-guardrails.md):
+  - STT: Deepgram nova-2-phonecall (ADR-0005, replaces Whisper)
+  - LLM: Gemini 2.0 Flash via livekit-plugins-google
+  - TTS: ElevenLabs Turbo v2.5 (ADR-0001)
+  - Email: Resend via backend (ADR-0002)
+  - Deployment: Local + Cloudflare Tunnel for MVP (ADR-0003)
+  - Orchestration: VoicePipelineAgent (ADR-0006)
 """
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+log = logging.getLogger("voice_agent.config")
 
 
 class Settings(BaseSettings):
     """
     Runtime configuration for the voice agent service.
 
-    Required for Phase 1:
+    Required for production:
       - LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
-      - TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
+      - VOICE_AGENT_JWT  (HS256 JWT, provisioned by Subbu)
+      - DEEPGRAM_API_KEY (ADR-0005)
       - GEMINI_API_KEY
-      - WHISPER_API_KEY (hosted OpenAI Whisper; provisioned by Subbu)
-      - ELEVENLABS_API_KEY (replaces VIBEVOICE_API_KEY per ADR-0001)
-      - ELEVENLABS_VOICE_ID (optional; defaults to Bella)
+      - ELEVENLABS_API_KEY
     """
 
     model_config = SettingsConfigDict(
@@ -50,128 +53,111 @@ class Settings(BaseSettings):
     )
     backend_api_timeout_seconds: float = Field(
         default=10.0,
-        description="Per-request timeout for backend tool calls.",
+        description="Default per-request timeout for backend tool calls.",
     )
 
-    # Service-level JWT for authenticating to Harsha's backend (Phase 5+).
-    # Provisioned by Subbu via auth.create_access_token(company_id, expires_in)
-    # and stored as the VOICE_AGENT_JWT environment variable. The token is an
-    # HS256-signed JWT containing {"company_id": "<uuid>", "exp": <timestamp>}.
-    # Default TTL from Harsha's create_access_token() is 24 hours. When the
-    # token expires the backend returns 401; the service must be restarted (or
-    # a token-refresh mechanism implemented) to get a fresh token.
-    # Decision on minting strategy (offline vs. token endpoint vs. per-call)
-    # is tracked in BLOCKERS.md §7 and needs a Subbu+Harsha decision before
-    # the voice agent can run in staging.
+    # Service-level JWT for authenticating to Harsha's backend.
+    # Provisioned by Subbu via auth.create_access_token(company_id, expires_in).
+    # The token is an HS256-signed JWT containing {"company_id": "<uuid>", "exp": <ts>}.
+    # Default TTL from create_access_token() is 24 hours.
+    # Empty string is only valid in test mode (STT_PROVIDER=mock, LLM_PROVIDER=mock).
     voice_agent_jwt: str = Field(
         default="",
         description=(
             "HS256 JWT for backend auth. Set VOICE_AGENT_JWT in env. "
-            "Provisioned by Subbu via auth.create_access_token(). 24h TTL by default."
+            "Provisioned by Subbu via auth.create_access_token(). 24h TTL by default. "
+            "Empty is allowed for offline test mode but will fail at runtime."
         ),
     )
 
     # -----------------------------------------------------------------------
-    # LiveKit — Phase 1 required
+    # LiveKit — required for production
     # -----------------------------------------------------------------------
     livekit_url: str | None = Field(
         default=None,
-        description="wss://... LiveKit server URL. Required for Phase 1.",
+        description="wss://... LiveKit server URL.",
     )
     livekit_api_key: str | None = Field(
         default=None,
-        description="LiveKit API key. Required for Phase 1.",
+        description="LiveKit API key.",
     )
     livekit_api_secret: str | None = Field(
         default=None,
-        description="LiveKit API secret. Required for Phase 1. Never log this.",
+        description="LiveKit API secret. Never log this value.",
     )
 
     # -----------------------------------------------------------------------
-    # Twilio — Phase 1 required
+    # Twilio — used for caller ID context (caller_phone from room metadata)
     # -----------------------------------------------------------------------
     twilio_account_sid: str | None = Field(
         default=None,
-        description="Twilio Account SID. Required for Phase 1.",
+        description="Twilio Account SID.",
     )
     twilio_auth_token: str | None = Field(
         default=None,
-        description="Twilio Auth Token. Required for Phase 1. Never log this.",
+        description="Twilio Auth Token. Never log this.",
     )
 
     # -----------------------------------------------------------------------
-    # Gemini (LLM) — Phase 1 required
+    # Deepgram (STT) — ADR-0005, replaces Whisper
+    # -----------------------------------------------------------------------
+    deepgram_api_key: str | None = Field(
+        default=None,
+        description=(
+            "Deepgram API key. Required for STT_PROVIDER=deepgram (default). "
+            "Never log this. Set DEEPGRAM_API_KEY in env. Provisioned by Subbu."
+        ),
+    )
+
+    # -----------------------------------------------------------------------
+    # Gemini (LLM) — required for production
     # -----------------------------------------------------------------------
     gemini_api_key: str | None = Field(
         default=None,
-        description="Google Gemini API key. Required for Phase 1. Never log this.",
+        description="Google Gemini API key. Never log this.",
     )
     gemini_model: str = Field(
         default="gemini-2.0-flash",
-        description="Gemini model ID. Locked to Gemini-3.0 Flash family for MVP.",
-    )
-
-    # -----------------------------------------------------------------------
-    # Whisper (STT) — Phase 1 required
-    # Hosted OpenAI Whisper. Subbu provisions the key; may share the same
-    # OpenAI key used for embeddings (semantically distinct env var).
-    # -----------------------------------------------------------------------
-    whisper_api_key: str | None = Field(
-        default=None,
         description=(
-            "OpenAI API key for hosted Whisper. Required for Phase 1. "
-            "Never log this. Set WHISPER_API_KEY in env. Provisioned by Subbu."
+            "Gemini model ID. Locked to Gemini Flash family per locked stack. "
+            "See docs/03-tooling-and-guardrails.md."
         ),
     )
 
     # -----------------------------------------------------------------------
-    # ElevenLabs (TTS) — Phase 1 required (ADR-0001 replaces VibeVoice)
+    # ElevenLabs (TTS) — ADR-0001 replaces VibeVoice
     # -----------------------------------------------------------------------
     elevenlabs_api_key: str | None = Field(
         default=None,
-        description=(
-            "ElevenLabs API key. Required for Phase 1. Never log this. "
-            "Set ELEVENLABS_API_KEY in env. Provisioned by Subbu."
-        ),
+        description="ElevenLabs API key. Never log this.",
     )
     elevenlabs_voice_id: str = Field(
         default="EXAVITQu4vr4xnSDxMaL",
-        description=(
-            "ElevenLabs voice ID. Defaults to 'Bella' — phone-quality female voice "
-            "recommended for Turbo v2.5. Override with ELEVENLABS_VOICE_ID env var."
-        ),
+        description="ElevenLabs voice ID. Defaults to 'Bella'.",
     )
     tts_provider: Literal["elevenlabs", "mock"] = Field(
         default="elevenlabs",
+        description="TTS provider. 'mock' for offline tests.",
+    )
+
+    # -----------------------------------------------------------------------
+    # STT provider selection — now includes deepgram (ADR-0005)
+    # -----------------------------------------------------------------------
+    stt_provider: Literal["deepgram", "whisper", "mock"] = Field(
+        default="deepgram",
         description=(
-            "TTS provider selection. 'elevenlabs' uses ElevenLabsTTSAdapter (production). "
-            "'mock' uses MockTTSAdapter (tests/local dev without API key). "
-            "Set TTS_PROVIDER=mock in .env for local development without ElevenLabs credentials."
+            "STT provider. 'deepgram' is the locked production provider (ADR-0005). "
+            "'whisper' retained for rollback path only. "
+            "'mock' for offline tests."
         ),
     )
 
     # -----------------------------------------------------------------------
-    # STT provider selection — Phase 1 finish-up
-    # -----------------------------------------------------------------------
-    stt_provider: Literal["whisper", "mock"] = Field(
-        default="whisper",
-        description=(
-            "STT provider selection. 'whisper' uses WhisperSTTAdapter (OpenAI hosted Whisper). "
-            "'mock' uses MockSTTAdapter (tests/local dev without API key). "
-            "Set STT_PROVIDER=mock in .env for offline testing."
-        ),
-    )
-
-    # -----------------------------------------------------------------------
-    # LLM provider selection — Phase 1 finish-up
+    # LLM provider selection
     # -----------------------------------------------------------------------
     llm_provider: Literal["gemini", "mock"] = Field(
         default="gemini",
-        description=(
-            "LLM provider selection. 'gemini' uses GeminiLLMAdapter (Gemini-2.0 Flash). "
-            "'mock' uses MockLLMAdapter (tests/local dev without API key). "
-            "Set LLM_PROVIDER=mock in .env for offline testing."
-        ),
+        description="LLM provider. 'gemini' uses Gemini Flash. 'mock' for tests.",
     )
 
     # -----------------------------------------------------------------------
@@ -185,14 +171,17 @@ class Settings(BaseSettings):
         ),
     )
     silence_timeout_seconds: float = Field(
-        default=3.0,
-        description="Seconds of silence before agent considers the caller done speaking.",
+        default=8.0,
+        description=(
+            "Seconds of silence before agent considers the caller done speaking. "
+            "VoicePipelineAgent uses this via its VAD configuration."
+        ),
     )
     max_response_tokens: int = Field(
         default=200,
         description=(
             "Soft cap on Gemini response tokens. Keep responses phone-length. "
-            "Gemini will be instructed separately in the system prompt."
+            "Gemini is also instructed separately in the system prompt."
         ),
     )
     tool_retry_max_attempts: int = Field(
@@ -209,17 +198,53 @@ class Settings(BaseSettings):
         description="'json' for structured production logs, 'console' for local dev.",
     )
 
+    # -----------------------------------------------------------------------
+    # Validators
+    # -----------------------------------------------------------------------
+
     @field_validator("gemini_model")
     @classmethod
     def validate_gemini_model(cls, v: str) -> str:
-        """Enforce locked stack — Gemini-3.0 Flash family only."""
-        allowed_prefixes = ("gemini-2.0-flash", "gemini-1.5-flash")
+        """
+        Enforce locked stack — Gemini Flash family only.
+
+        Accepts:
+          - gemini-2.0-flash (current default, ADR-0006)
+          - gemini-1.5-flash (rollback path)
+          - gemini-3.0-flash (forward-compatible for future release)
+          - Any suffix after the model family prefix (e.g., gemini-2.0-flash-exp)
+        """
+        allowed_prefixes = ("gemini-2.0-flash", "gemini-1.5-flash", "gemini-3.0-flash")
         if not any(v.startswith(p) for p in allowed_prefixes):
             raise ValueError(
                 f"gemini_model '{v}' is not in the approved Gemini Flash family. "
+                "Allowed: gemini-2.0-flash, gemini-1.5-flash, gemini-3.0-flash (+ suffixes). "
                 "See docs/03-tooling-and-guardrails.md. File an ADR to change this."
             )
         return v
+
+    @model_validator(mode="after")
+    def log_provider_config(self) -> "Settings":
+        """
+        Log which providers are configured at startup.
+        Helps diagnose "silent 401" and missing-key problems quickly.
+        Never logs key values — only whether keys are set or not.
+        """
+        log.info(
+            "Voice agent configuration loaded",
+            extra={
+                "stt_provider": self.stt_provider,
+                "llm_provider": self.llm_provider,
+                "tts_provider": self.tts_provider,
+                "deepgram_key_set": bool(self.deepgram_api_key),
+                "gemini_key_set": bool(self.gemini_api_key),
+                "elevenlabs_key_set": bool(self.elevenlabs_api_key),
+                "voice_agent_jwt_set": bool(self.voice_agent_jwt),
+                "livekit_url_set": bool(self.livekit_url),
+                "gemini_model": self.gemini_model,
+            },
+        )
+        return self
 
 
 @lru_cache(maxsize=1)

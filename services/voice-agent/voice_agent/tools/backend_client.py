@@ -390,63 +390,99 @@ class BackendClient:
       - Returns a typed Pydantic response model
       - Raises BackendToolError on any non-2xx response
 
-    Auth: Bearer JWT (Phase 5+). The Authorization header is set both in the
-    default client headers and repeated per-request so it is never dropped by
-    header merging. The JWT is provisioned by Subbu via the VOICE_AGENT_JWT
-    env var (see config.py). It is signed with the backend SECRET_KEY and
-    carries a company_id claim. Default TTL is 24h; restart the service or
-    implement token refresh when the token expires.
+    Auth: Bearer JWT. The Authorization header is set both in the default client
+    headers and repeated per-request so it is never dropped by header merging.
+    The JWT is provisioned by Subbu via the VOICE_AGENT_JWT env var (see config.py).
+    It is signed with the backend SECRET_KEY and carries a company_id claim.
+    Default TTL is 24h; restart the service when the token expires.
 
-    Usage:
-        async with BackendClient(
+    Usage (preferred — lazy init, no context manager required):
+        client = BackendClient(
             base_url=settings.backend_api_url,
             jwt_token=settings.voice_agent_jwt,
-        ) as client:
-            call_resp = await client.create_call(
-                property_id=uuid.UUID("..."),
-                twilio_call_sid="CAabc123",
-            )
-            call_id = call_resp.id
+        )
+        call_resp = await client.create_call(...)
+        await client.close()  # call explicitly at end of session
+
+    Usage (async context manager — also supported):
+        async with BackendClient(...) as client:
+            call_resp = await client.create_call(...)
+
+    IMPORTANT: jwt_token must be non-empty. BackendClient raises ValueError
+    at construction time if it is empty — fail fast rather than silent 401.
+    (Critical issue #6 fix.)
+
+    IMPORTANT: timeout_seconds is now a constructor parameter (critical issue #1 fix).
+    The prior code accepted timeout_seconds but the constructor signature did not include
+    it — this caused a TypeError crash on startup.
     """
 
     def __init__(
         self,
         base_url: str,
         jwt_token: str,
+        timeout_seconds: float = 10.0,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         """
         Args:
-            base_url:    Root URL of the backend API, e.g. "http://localhost:8000".
-            jwt_token:   HS256-signed JWT bearing company_id claim. Sent as
-                         "Authorization: Bearer <token>" on every request.
-                         Provisioned via VOICE_AGENT_JWT env var (Subbu).
-            http_client: Optional pre-built httpx.AsyncClient (for testing / DI).
-                         If None, a fresh client is created on __aenter__.
+            base_url:        Root URL of the backend API, e.g. "http://localhost:8000".
+            jwt_token:       HS256-signed JWT bearing company_id claim. Sent as
+                             "Authorization: Bearer <token>" on every request.
+                             Must be non-empty — raises ValueError if empty.
+                             Provisioned via VOICE_AGENT_JWT env var (Subbu).
+            timeout_seconds: Default per-request timeout in seconds (critical issue #1).
+                             Each method can override this with a tighter SLO.
+                             Default: 10.0 s.
+            http_client:     Optional pre-built httpx.AsyncClient (for testing / DI).
+                             If None, a client is created lazily on the first request.
+
+        Raises:
+            ValueError: If jwt_token is empty (critical issue #6 — fail fast, not 401).
         """
+        if not jwt_token:
+            raise ValueError(
+                "BackendClient requires a non-empty jwt_token. "
+                "Set VOICE_AGENT_JWT in services/voice-agent/.env. "
+                "Token is provisioned by Subbu via auth.create_access_token()."
+            )
         self._base_url = base_url.rstrip("/")
         self._jwt_token = jwt_token
+        self._default_timeout = timeout_seconds
         self._external_client = http_client
+        # _http is initialised lazily on first use (or explicitly via __aenter__).
+        # This eliminates the "must be used as async context manager" footgun
+        # (critical issue #2 — _http stayed None until __aenter__ was called).
         self._http: httpx.AsyncClient | None = http_client
         log.info(
             "BackendClient created",
             extra={"base_url": self._base_url},
         )
 
-    async def __aenter__(self) -> "BackendClient":
-        if self._external_client is None:
+    def _ensure_http(self) -> httpx.AsyncClient:
+        """
+        Lazily create the httpx client if not yet initialised.
+
+        This eliminates the requirement to use BackendClient as an async context
+        manager before making any calls (critical issue #2 fix).
+        """
+        if self._http is None:
             self._http = httpx.AsyncClient(
                 base_url=self._base_url,
                 headers={"Authorization": f"Bearer {self._jwt_token}"},
-                timeout=10.0,  # default; each method overrides per call
+                timeout=self._default_timeout,
             )
+        return self._http
+
+    async def __aenter__(self) -> "BackendClient":
+        self._ensure_http()
         return self
 
     async def __aexit__(self, *_: Any) -> None:
         await self.close()
 
     async def close(self) -> None:
-        """Close the underlying httpx client if we own it."""
+        """Close the underlying httpx client if we own it. Safe to call multiple times."""
         if self._http is not None and self._external_client is None:
             await self._http.aclose()
             self._http = None
@@ -456,12 +492,8 @@ class BackendClient:
     # ------------------------------------------------------------------
 
     def _client(self) -> httpx.AsyncClient:
-        if self._http is None:
-            raise RuntimeError(
-                "BackendClient must be used as an async context manager "
-                "or have close() called explicitly."
-            )
-        return self._http
+        """Return the httpx client, creating it lazily if needed."""
+        return self._ensure_http()
 
     def _auth_headers(self) -> dict[str, str]:
         """Bearer JWT repeated per-request — never relies on client defaults alone."""

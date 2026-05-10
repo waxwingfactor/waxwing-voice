@@ -10,7 +10,7 @@ This document keeps the MVP focused. Each developer should follow these tool cho
 | --- | --- | --- |
 | Telephony | Twilio | Plivo, Vonage, SignalWire, custom PSTN providers |
 | Voice orchestration | LiveKit Agents | Custom WebRTC orchestration, alternate agent frameworks |
-| STT | Whisper | Deepgram, AssemblyAI, Google STT, browser STT |
+| STT | Deepgram nova-2-phonecall | Whisper (rollback only, see ADR-0005), AssemblyAI, Google STT, browser STT |
 | LLM | Gemini-3.0 Flash | OpenAI, Anthropic, local LLMs, multi-model routing |
 | TTS | ElevenLabs Turbo v2.5 | VibeVoice, Azure TTS, PlayHT, Google TTS, browser TTS |
 | Frontend | Next.js, React, TypeScript | Angular, Vue, Svelte, plain jQuery |
@@ -35,6 +35,8 @@ Architecture decisions that changed this table:
 - [ADR-0001](../docs/adr/0001-elevenlabs-replaces-vibevoice.md) — ElevenLabs Turbo v2.5 replaces VibeVoice (TTS), 2026-05-09
 - [ADR-0002](../docs/adr/0002-resend-replaces-sendgrid.md) — Resend replaces SendGrid (email), 2026-05-09
 - [ADR-0003](../docs/adr/0003-local-deployment-for-mvp-demo.md) — Local deployment for MVP demo, 2026-05-09
+- [ADR-0005](../docs/adr/0005-deepgram-replaces-whisper.md) — Deepgram nova-2-phonecall replaces Whisper (STT), 2026-05-09
+- [ADR-0006](../docs/adr/0006-voice-pipeline-agent-pattern.md) — VoicePipelineAgent pattern adopted (voice orchestration), 2026-05-09
 
 ## 3. Allowed Language Boundaries
 

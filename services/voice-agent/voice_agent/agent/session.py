@@ -45,7 +45,7 @@ from voice_agent.conversation.state_machine import (
     LeadCaptureStateMachine,
 )
 from voice_agent.conversation.summary_builder import SummaryBuilder
-from voice_agent.providers.tts.protocol import TTSAdapter, TTSProviderError
+from voice_agent.providers.tts.protocol import TTSAdapter
 from voice_agent.state.call_state import (
     CallPhase,
     CallState,
@@ -137,37 +137,14 @@ class VoiceSession:
         self._jwt_token = jwt_token
         self._client = backend_client
 
-        # TTS adapter — injected for testability, built from settings in production.
-        # If no adapter is injected, use the configured provider:
-        #   tts_provider="elevenlabs" (default) -> ElevenLabsTTSAdapter (requires ELEVENLABS_API_KEY)
-        #   tts_provider="mock"                 -> MockTTSAdapter (no key needed, dev/test)
-        # If tts_provider="elevenlabs" but ELEVENLABS_API_KEY is missing, falls back to
-        # MockTTSAdapter and logs a warning — this prevents test breakage when running
-        # without credentials. In staging, Subbu must set ELEVENLABS_API_KEY.
-        if tts_adapter is None:
-            from voice_agent.config import get_settings
-            settings = get_settings()
-            if settings.tts_provider == "mock":
-                from voice_agent.providers.tts.mock import MockTTSAdapter
-                tts_adapter = MockTTSAdapter()
-                log.info("VoiceSession: using MockTTSAdapter (TTS_PROVIDER=mock)")
-            else:
-                from voice_agent.providers.tts.elevenlabs import ElevenLabsTTSAdapter
-                api_key = settings.elevenlabs_api_key
-                if not api_key:
-                    from voice_agent.providers.tts.mock import MockTTSAdapter
-                    tts_adapter = MockTTSAdapter()
-                    log.warning(
-                        "VoiceSession: ELEVENLABS_API_KEY not set — "
-                        "falling back to MockTTSAdapter. "
-                        "Set ELEVENLABS_API_KEY or TTS_PROVIDER=mock to suppress this warning."
-                    )
-                else:
-                    tts_adapter = ElevenLabsTTSAdapter(
-                        api_key=api_key,
-                        voice_id=settings.elevenlabs_voice_id,
-                    )
-        self._tts_adapter: TTSAdapter = tts_adapter
+        # Low 3 fix: ElevenLabsTTSAdapter construction removed from VoiceSession.
+        # In the VPA pipeline, TTS goes through livekit-plugins-elevenlabs wired in
+        # entrypoint.py — VoiceSession never calls _tts_speak or the adapter directly
+        # in production. Constructing the adapter here was wasteful (opened a connection)
+        # and misleading (suggested the session was doing TTS when it isn't).
+        # The tts_adapter parameter is retained for test backwards compatibility:
+        # tests that inject MockTTSAdapter for handle_barge_in still work.
+        self._tts_adapter: TTSAdapter | None = tts_adapter  # None in production
 
         # Phase 2: conversation orchestration modules
         self.state_machine = LeadCaptureStateMachine()
@@ -179,8 +156,13 @@ class VoiceSession:
         self._retrieval = RetrievalCoordinator(client=self._client)
 
         # Phase 3: last retrieved knowledge slot (used by prompt builder)
-        from voice_agent.prompts.system_prompt import KnowledgeSlot
+        from voice_agent.prompts.system_prompt import KnowledgeSlot, PropertyProfileSlot
         self._last_knowledge_slot: KnowledgeSlot = KnowledgeSlot()
+
+        # Bug F fix: property profile loaded from backend at call start.
+        # Stored here so before_llm_cb can pass it to build_system_prompt every turn.
+        # Defaults to placeholder slots until _load_property_profile() succeeds.
+        self._property_profile: PropertyProfileSlot = PropertyProfileSlot()
 
         # Phase 4: tour booking and email follow-up coordinators
         self._booking_coordinator = TourBookingCoordinator(client=self._client)
@@ -389,6 +371,19 @@ class VoiceSession:
         # delegate the turn to the appropriate coordinator. The coordinator
         # returns a result with booking/email outcome; we re-sync CallState.
         coordinator_result: dict[str, Any] = {}
+
+        # Medium 5 fix: ensure lead_id is set before coordinator delegation.
+        # If state.lead_id is None (no prior create_or_update_lead call), call it now
+        # so the booking/email coordinator has a valid lead_id to pass to book_tour
+        # and send_follow_up_email. Without this wiring, TOUR_BOOKING and
+        # EMAIL_FOLLOWUP coordinators were silently skipped every time (lead_id_str
+        # was always None → the `if lead_id_str:` guard prevented any coordinator run).
+        if (
+            transition.new_phase in (ConversationPhase.TOUR_BOOKING, ConversationPhase.EMAIL_FOLLOWUP)
+            and self.state.backend_call_id
+            and not self.state.lead_id
+        ):
+            await self._ensure_lead_id()
 
         if transition.new_phase == ConversationPhase.TOUR_BOOKING and self.state.backend_call_id:
             lead_id_str = self.state.lead_id
@@ -601,19 +596,18 @@ class VoiceSession:
         """
         Called when the caller starts speaking while the agent is speaking.
 
-        Cancels the current TTS stream via the adapter. The streaming loop in
-        ElevenLabsTTSAdapter checks the cancel event before each chunk and
-        exits cleanly — no abrupt connection teardown.
+        In the VPA pipeline, barge-in is handled by VoicePipelineAgent's VAD
+        integration — this method is kept for test compatibility only.
 
-        After cancel, control returns to the caller-utterance processing loop.
-        Phase 1 finish-up: LiveKit barge-in detection triggers this via the
-        Agents framework's VAD (Voice Activity Detection) event.
+        If a tts_adapter is injected (e.g. MockTTSAdapter in tests), cancel is
+        forwarded to it. In production, _tts_adapter is None and this is a no-op.
         """
         log.debug(
             "handle_barge_in: cancelling TTS stream",
             extra={"call_id": self.state.call_id},
         )
-        await self._tts_adapter.cancel()
+        if self._tts_adapter is not None:
+            await self._tts_adapter.cancel()
 
     async def handle_silence_timeout(self) -> None:
         """
@@ -663,90 +657,148 @@ class VoiceSession:
         if call_phase and call_phase != self.state.phase:
             self.state.set_phase(call_phase)
 
-    async def _load_property_profile(self) -> None:
-        """Phase 1: call get_property_profile, populate prompt slots."""
-        pass
-
-    async def _stt_transcribe(self, audio_bytes: bytes) -> str:
-        """Phase 1: pass audio to Whisper, return transcript text."""
-        raise NotImplementedError("Whisper STT not wired yet (Phase 1).")
-
-    async def _llm_respond(self, system_prompt: str, conversation_history: list) -> str:
-        """Phase 1: send prompt + history to Gemini-3.0 Flash, return text response."""
-        raise NotImplementedError("Gemini LLM not wired yet (Phase 1).")
-
-    async def _tts_speak(self, text: str) -> None:
+    async def _ensure_lead_id(self) -> None:
         """
-        Stream text through ElevenLabs Turbo v2.5 and push audio to LiveKit room.
+        Medium 5 fix: call create_or_update_lead to obtain a lead_id if we don't
+        have one yet. Sets state.lead_id on success.
 
-        Phase 1: ElevenLabsTTSAdapter is wired. LiveKit audio sink push is
-        stubbed — Phase 1 finish-up will route chunks into the LiveKit room's
-        audio track via the Agents framework.
+        This is called just before TOUR_BOOKING or EMAIL_FOLLOWUP coordinator
+        delegation in handle_caller_turn. Without it, state.lead_id is always None
+        and the coordinator guards (`if lead_id_str:`) silently skip coordination.
 
-        On barge-in: caller calls handle_barge_in() -> self._tts_adapter.cancel().
-        The streaming loop inside ElevenLabsTTSAdapter checks the cancel event
-        before each chunk and exits cleanly.
-
-        On adapter failure: logs the error and does not re-raise — the call
-        continues without TTS output for this utterance. A TTSProviderError with
-        retryable=True triggers a single retry before falling back to silence.
-
-        Args:
-            text: Agent utterance text. Keep phone-length (1–3 sentences).
+        If the call fails: logs the error. state.lead_id remains None. The
+        coordinator guard will still prevent the booking/email attempt (safe).
         """
-        log.debug(
-            "_tts_speak: synthesizing",
-            extra={"call_id": self.state.call_id, "text_length": len(text)},
-            # text itself not logged — could contain PII if echoing caller input
-        )
+        if self.state.lead_id:
+            return  # already set — idempotent
+
         try:
-            chunk_count = 0
-            async for chunk in self._tts_adapter.synthesize_streaming(text):
-                chunk_count += 1
-                # Phase 1 finish-up: push `chunk` to LiveKit audio sink here.
-                # e.g., await self._livekit_audio_source.capture_frame(chunk)
-                # Stub: discard chunk until LiveKit wiring is complete.
-                _ = chunk
-
-            log.debug(
-                "_tts_speak: synthesis complete",
+            from voice_agent.tools.backend_client import LeadFieldsInput
+            # Build a LeadFieldsInput from current call state (only captured fields).
+            lead_fields_input = LeadFieldsInput(
+                **self.state.lead_fields.to_backend_payload()
+            )
+            lead_resp = await self._client.create_or_update_lead(
+                property_id=uuid.UUID(self.state.property_id),
+                call_id=self._effective_call_id(),
+                lead_fields=lead_fields_input,
+            )
+            self.state.lead_id = str(lead_resp.lead_id)
+            log.info(
+                "VoiceSession._ensure_lead_id: lead record created/updated",
                 extra={
                     "call_id": self.state.call_id,
-                    "chunk_count": chunk_count,
+                    "lead_id": self.state.lead_id,
+                    "created": lead_resp.created,
                 },
             )
-        except TTSProviderError as exc:
-            if exc.retryable:
-                log.warning(
-                    "_tts_speak: retryable TTS failure, retrying once",
-                    extra={
-                        "call_id": self.state.call_id,
-                        "error": exc.message,
-                        "status_code": exc.status_code,
-                    },
-                )
-                try:
-                    async for chunk in self._tts_adapter.synthesize_streaming(text):
-                        _ = chunk  # Phase 1 stub
-                except TTSProviderError as retry_exc:
-                    log.error(
-                        "_tts_speak: TTS retry failed, continuing without audio",
-                        extra={
-                            "call_id": self.state.call_id,
-                            "error": retry_exc.message,
-                        },
-                    )
-                    self.state.tool_failure_count += 1
-            else:
-                log.error(
-                    "_tts_speak: non-retryable TTS failure, continuing without audio",
-                    extra={
-                        "call_id": self.state.call_id,
-                        "error": exc.message,
-                        "status_code": exc.status_code,
-                    },
-                )
-                self.state.tool_failure_count += 1
+        except BackendToolError as exc:
+            log.error(
+                "VoiceSession._ensure_lead_id: create_or_update_lead failed",
+                extra={
+                    "call_id": self.state.call_id,
+                    "error_code": exc.code,
+                    "retryable": exc.retryable,
+                },
+            )
+            self.state.tool_failure_count += 1
+        except Exception as exc:
+            log.error(
+                "VoiceSession._ensure_lead_id: unexpected error",
+                extra={
+                    "call_id": self.state.call_id,
+                    "error": str(exc)[:200],
+                },
+            )
+            self.state.tool_failure_count += 1
+
+    async def _load_property_profile(self) -> None:
+        """
+        Load property profile from backend and populate _property_profile slot.
+
+        Bug F fix: This was a no-op stub. It is now fully implemented.
+        Called in start() (fallback path) AND explicitly in the production path
+        (bridge_call_id branch in entrypoint.py) so the system prompt always
+        carries real property data regardless of which path created the call record.
+
+        On failure: logs the error and leaves _property_profile as the placeholder
+        default (safe — the agent will say "[PROPERTY_NAME_PLACEHOLDER]" rather
+        than crashing). This is acceptable for graceful degradation.
+        """
+        from voice_agent.prompts.system_prompt import PropertyProfileSlot
+        try:
+            profile_resp = await self._client.get_property_profile(
+                property_id=uuid.UUID(self.state.property_id),
+            )
+            # Map backend response fields to PropertyProfileSlot.
+            amenities: list[str] = []
+            if profile_resp.amenities:
+                # amenities is a dict[str, Any] from the backend; extract keys as labels.
+                amenities = list(profile_resp.amenities.keys())
+
+            office_hours_str = "[OFFICE_HOURS_PLACEHOLDER]"
+            if profile_resp.office_hours:
+                office_hours_str = str(profile_resp.office_hours)
+
+            pet_policy_str = "[PET_POLICY_PLACEHOLDER]"
+            if profile_resp.leasing_policies:
+                pet_policy_str = str(profile_resp.leasing_policies)
+
+            escalation_str = "[ESCALATION_CONTACT_PLACEHOLDER]"
+            if profile_resp.escalation_contacts:
+                escalation_str = str(profile_resp.escalation_contacts[0]) if profile_resp.escalation_contacts else escalation_str
+
+            self._property_profile = PropertyProfileSlot(
+                property_id=str(profile_resp.id),
+                property_name=profile_resp.name,
+                address=profile_resp.address or "[ADDRESS_PLACEHOLDER]",
+                description=profile_resp.description or "[DESCRIPTION_PLACEHOLDER]",
+                amenities=amenities,
+                office_hours=office_hours_str,
+                pet_policy=pet_policy_str,
+                maintenance_instructions=profile_resp.maintenance_instructions or "[MAINTENANCE_INSTRUCTIONS_PLACEHOLDER]",
+                escalation_contact=escalation_str,
+            )
+            log.info(
+                "VoiceSession._load_property_profile: loaded",
+                extra={
+                    "call_id": self.state.call_id,
+                    "property_name": profile_resp.name,
+                },
+            )
+        except BackendToolError as exc:
+            log.error(
+                "VoiceSession._load_property_profile: failed to load property profile",
+                extra={
+                    "call_id": self.state.call_id,
+                    "property_id": self.state.property_id,
+                    "error_code": exc.code,
+                },
+            )
+            # Leave _property_profile as placeholder default — agent continues without crash.
+        except Exception as exc:
+            log.error(
+                "VoiceSession._load_property_profile: unexpected error",
+                extra={
+                    "call_id": self.state.call_id,
+                    "error": str(exc)[:200],
+                },
+            )
+
+    async def _stt_transcribe(self, audio_bytes: bytes) -> str:
+        """
+        DEAD STUB — STT is now handled by VoicePipelineAgent + livekit-plugins-deepgram.
+        Retained to avoid breaking test_phase1_scenarios.py which exercises the
+        VoiceSession turn-by-turn interface without live providers.
+        """
+        raise NotImplementedError("STT handled by VoicePipelineAgent (ADR-0005).")
+
+    async def _llm_respond(self, system_prompt: str, conversation_history: list) -> str:
+        """
+        DEAD STUB — LLM is now handled by VoicePipelineAgent + livekit-plugins-google.
+        Retained to avoid breaking test_phase1_scenarios.py.
+        """
+        raise NotImplementedError("LLM handled by VoicePipelineAgent (ADR-0006).")
 
     def _effective_call_id(self) -> uuid.UUID:
         """
