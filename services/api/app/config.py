@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     default_company_id: str = "00000000-0000-0000-0000-000000000001"
     default_property_id: str = "00000000-0000-0000-0000-000000000003"
 
+    # LiveKit bridge (ADR-0004)
+    # LIVEKIT_URL       — wss://your-project.livekit.cloud
+    # LIVEKIT_API_KEY   — LiveKit API key
+    # LIVEKIT_API_SECRET — LiveKit API secret
+    livekit_url: str = ""
+    livekit_api_key: str = ""
+    livekit_api_secret: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

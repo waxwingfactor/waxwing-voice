@@ -134,6 +134,7 @@ class AudioSinkAdapter:
                           Type is object because livekit may not be importable.
         """
         self._source = audio_source
+        self._push_count = 0
 
     async def push(self, pcm_chunk: bytes) -> None:
         """
@@ -165,6 +166,11 @@ class AudioSinkAdapter:
                 samples_per_channel=num_samples,
             )
             await self._source.capture_frame(frame)
+            self._push_count += 1
+            if self._push_count == 1:
+                log.info("PIPELINE[6/7] AudioSinkAdapter: first TTS frame pushed to LiveKit room")
+            elif self._push_count % 200 == 0:
+                log.debug("AudioSinkAdapter: pushed %d frames to LiveKit", self._push_count)
         except Exception as exc:
             log.error(
                 "AudioSinkAdapter: error pushing audio frame",

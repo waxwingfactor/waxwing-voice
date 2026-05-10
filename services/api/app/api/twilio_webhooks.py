@@ -2,7 +2,7 @@
 
 This module owns the three HTTP webhook endpoints that Twilio calls and the
 WebSocket endpoint that bridges Twilio's Media Streams protocol to Akhil's
-voice agent.
+voice agent via LiveKit (ADR-0004).
 
 Endpoints (registered in main.py):
     POST /v1/voice/twilio          — inbound call handler; returns TwiML
@@ -15,14 +15,17 @@ Auth: Twilio X-Twilio-Signature HMAC validation on all HTTP webhooks.
       which is the intended behaviour for local development without real Twilio.
 
 Consumer Notes (Akhil — voice agent):
-    - The WebSocket at /ws/twilio/media delivers mulaw audio in base64 chunks.
-    - The TwiML <Stream> passes `call_id` (internal UUID) and `caller_phone`
-      as custom parameters in the "start" event so the agent can associate the
-      stream with the correct Call record.
-    - The two TODO(akhil) markers in twilio_media_stream are the integration
-      points: session initialisation on "start" and audio forwarding on "media".
+    - The WebSocket at /ws/twilio/media now bridges audio into a LiveKit room.
+    - Room name format: "call-{call_id}".
+    - Room metadata JSON contains: property_id, company_id, twilio_call_sid,
+      caller_phone, livekit_room_id — connect to that room to receive caller audio
+      and publish TTS audio back.
+    - Audio format entering LiveKit: 16 kHz, mono, 16-bit signed LE PCM, 640-byte frames.
+    - If LIVEKIT_URL / LIVEKIT_API_KEY are not set, the bridge is skipped and a
+      warning is logged — calls still create DB records.
 """
 
+import base64
 import json
 import logging
 import uuid
@@ -32,6 +35,11 @@ from fastapi import APIRouter, Depends, Request, Response, WebSocket, WebSocketD
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bridge.livekit_bridge import (
+    TwilioLiveKitBridge,
+    create_livekit_room,
+    generate_participant_token,
+)
 from app.config import get_settings
 from app.database import get_db
 from app.models.call import Call
@@ -80,9 +88,13 @@ def _validate_twilio_signature(request: Request, body: bytes) -> bool:
 
     validator = RequestValidator(auth_token)
     signature = request.headers.get("X-Twilio-Signature", "")
-    url = str(request.url)
 
-    # Twilio validates against the exact URL it was configured with.
+    # Twilio signs against the public URL it called, not the internal localhost
+    # URL that FastAPI sees when running behind ngrok. Reconstruct the public URL
+    # from PUBLIC_BASE_URL + the request path so the signature check matches.
+    public_base = settings.public_base_url.rstrip("/")
+    url = f"{public_base}{request.url.path}"
+
     # Parse the form body as a flat dict for the validator.
     try:
         from urllib.parse import parse_qsl
@@ -91,7 +103,27 @@ def _validate_twilio_signature(request: Request, body: bytes) -> bool:
     except Exception:
         params = {}
 
-    return validator.validate(url, params, signature)
+    result = validator.validate(url, params, signature)
+
+    # Debug logging — shows exactly what is being compared so mismatches are visible.
+    logger.debug(
+        "Twilio signature validation — url=%s signature=%s params=%s result=%s",
+        url,
+        signature,
+        params,
+        result,
+    )
+    if not result:
+        logger.warning(
+            "Twilio signature FAILED — url_used=%s | signature_received=%s | "
+            "public_base_url_in_env=%s | internal_url=%s",
+            url,
+            signature,
+            settings.public_base_url,
+            str(request.url),
+        )
+
+    return result
 
 
 def _map_twilio_status(twilio_status: str, current_status: str) -> str:
@@ -399,6 +431,9 @@ async def twilio_media_stream(websocket: WebSocket) -> None:
     """
     await websocket.accept()
     call_id: str | None = None
+    bridge: TwilioLiveKitBridge | None = None
+    stream_sid: str = ""
+    _media_frame_count: int = 0
 
     try:
         async for message in websocket.iter_text():
@@ -409,20 +444,53 @@ async def twilio_media_stream(websocket: WebSocket) -> None:
                 logger.info("Twilio media stream connected")
 
             elif event == "start":
-                stream_sid: str = data["start"]["streamSid"]
+                stream_sid = data["start"]["streamSid"]
                 custom_params: dict = data["start"].get("customParameters", {})
                 call_id = custom_params.get("call_id")
-                # caller_phone is extracted here for the voice agent to consume.
-                _caller_phone: str | None = custom_params.get("caller_phone")
-                logger.info("Stream started: stream_sid=%s call_id=%s", stream_sid, call_id)
-                # TODO(akhil): initialize voice agent session here
-                # Pass: stream_sid, call_id, _caller_phone, websocket
+                caller_phone: str = custom_params.get("caller_phone", "")
+                logger.info(
+                    "PIPELINE[0/7] Twilio stream started: stream_sid=%s call_id=%s caller=%s",
+                    stream_sid, call_id, caller_phone,
+                )
+
+                settings = get_settings()
+                if settings.livekit_url and settings.livekit_api_key:
+                    room_name = f"call-{call_id}"
+                    metadata = {
+                        "property_id": settings.default_property_id,
+                        "company_id": settings.default_company_id,
+                        "twilio_call_sid": stream_sid,
+                        "caller_phone": caller_phone,
+                        "livekit_room_id": room_name,
+                    }
+                    await create_livekit_room(room_name, metadata)
+                    token = generate_participant_token(room_name, "twilio-bridge")
+                    bridge = TwilioLiveKitBridge(room_name, token, websocket, stream_sid)
+                    await bridge.start()
+                    logger.info("LiveKit bridge started for call_id=%s room=%s", call_id, room_name)
+                else:
+                    logger.warning(
+                        "LiveKit not configured (LIVEKIT_URL/LIVEKIT_API_KEY missing) "
+                        "— audio bridge disabled for call_id=%s",
+                        call_id,
+                    )
 
             elif event == "media":
-                # base64-encoded mulaw audio — consumed by the voice agent (see TODO below).
-                _payload: str = data["media"]["payload"]
-                # TODO(akhil): send audio payload to voice agent for STT processing
-                # The voice agent reads this and sends back TTS audio
+                payload: str = data["media"]["payload"]
+                if bridge is not None:
+                    mulaw_bytes = base64.b64decode(payload)
+                    _media_frame_count += 1
+                    if _media_frame_count == 1:
+                        logger.info(
+                            "PIPELINE[1/7] First media frame received from Twilio: "
+                            "call_id=%s bytes=%d", call_id, len(mulaw_bytes)
+                        )
+                    elif _media_frame_count % 100 == 0:
+                        logger.debug(
+                            "PIPELINE media frames: count=%d call_id=%s bytes_this_frame=%d",
+                            _media_frame_count, call_id, len(mulaw_bytes),
+                        )
+                    await bridge.push_caller_audio(mulaw_bytes)
 
             elif event == "dtmf":
                 digit: str = data["dtmf"]["digit"]
@@ -430,11 +498,12 @@ async def twilio_media_stream(websocket: WebSocket) -> None:
 
             elif event == "stop":
                 logger.info("Stream stopped for call_id=%s", call_id)
-                # Signal voice agent to finalise and save summary (Akhil's responsibility)
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected for call_id=%s", call_id)
     except Exception:
         logger.exception("Error in media stream for call_id=%s", call_id)
     finally:
+        if bridge is not None:
+            await bridge.stop()
         logger.info("Media stream closed for call_id=%s", call_id)

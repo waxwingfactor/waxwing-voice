@@ -251,6 +251,10 @@ async def _run_agent_turn(
 
     # 4. Generate LLM response
     response_text = ""
+    log.info(
+        "PIPELINE[4/7] LLM starting: call_id=%s history_turns=%d",
+        session.state.call_id, len(history),
+    )
     try:
         async for token in llm.respond_streaming(system_prompt, history):
             response_text += token
@@ -272,6 +276,11 @@ async def _run_agent_turn(
     if not response_text.strip():
         response_text = "I didn't catch that. Could you repeat your question?"
 
+    log.info(
+        "PIPELINE[4/7] LLM complete: call_id=%s response_chars=%d text_preview=%.80r",
+        session.state.call_id, len(response_text), response_text,
+    )
+
     # 5. Record agent response in call state transcript
     from voice_agent.state.call_state import SpeakerRole
     session.state.add_segment(
@@ -280,9 +289,17 @@ async def _run_agent_turn(
     )
 
     # 6. Stream TTS audio to room
+    log.info(
+        "PIPELINE[5/7] TTS starting: call_id=%s text_chars=%d",
+        session.state.call_id, len(response_text),
+    )
+    tts_chunks = 0
+    tts_bytes = 0
     try:
         async for chunk in tts.synthesize_streaming(response_text):
             await audio_sink.push(chunk)
+            tts_chunks += 1
+            tts_bytes += len(chunk)
     except Exception as exc:
         log.error(
             "Worker: TTS synthesis failed",
@@ -294,6 +311,11 @@ async def _run_agent_turn(
             {"tool": "tts", "error": str(exc)[:200]},
         )
         session.state.tool_failure_count += 1
+    else:
+        log.info(
+            "PIPELINE[5/7] TTS complete: call_id=%s chunks=%d bytes=%d",
+            session.state.call_id, tts_chunks, tts_bytes,
+        )
 
     return not escalated
 
@@ -504,32 +526,47 @@ async def entrypoint(ctx: Any) -> None:
         ctx.room.on("participant_disconnected", _on_participant_disconnected)
 
     try:
-        # Subscribe to caller's audio stream
+        # Subscribe to caller's audio stream via LiveKit track_subscribed event.
+        # The Twilio bridge (Harsha's backend) joins as "twilio-bridge" and publishes
+        # a RemoteAudioTrack containing 16kHz PCM frames. We queue arriving tracks
+        # so the async loop can await them without blocking the event callback.
         caller_audio_stream = None
-        if _LIVEKIT_AVAILABLE and hasattr(ctx, "room"):
-            # In a real LiveKit worker, the framework provides the audio stream
-            # via the participant's audio track subscription. The exact API depends
-            # on livekit-agents version; the pattern below is for >=0.10:
-            # audio_stream = AudioStream(participant.audio_track)
-            # For now we iterate over subscribed tracks when a participant joins.
-            pass
+        _track_queue: asyncio.Queue = asyncio.Queue()
+
+        _lk_rtc: Any = None
+        if _LIVEKIT_AVAILABLE and hasattr(ctx.room, "on"):
+            try:
+                from livekit import rtc as lk_rtc  # type: ignore[import-not-found]
+                _lk_rtc = lk_rtc
+
+                @ctx.room.on("track_subscribed")
+                def _on_track_subscribed(track: Any, _: Any, participant: Any) -> None:
+                    if isinstance(track, lk_rtc.RemoteAudioTrack):
+                        log.info(
+                            "Worker: caller audio track subscribed",
+                            extra={"participant": str(getattr(participant, "identity", ""))[:50]},
+                        )
+                        _track_queue.put_nowait(track)
+
+            except ImportError:
+                log.warning("Worker: livekit.rtc not available — audio subscription disabled")
 
         # Main loop: process caller utterances
         while not _disconnected.is_set():
-            # In production: get next utterance from LiveKit AudioStream via STT.
-            # Here we drive the loop from a mock or real audio stream:
             if caller_audio_stream is None:
-                # No audio stream yet (livekit not available or caller not yet joined).
-                # In test mode, the per-turn loop is driven externally via handle_caller_turn.
-                # In production, this loop awaits LiveKit's audio events.
-                if not _LIVEKIT_AVAILABLE:
+                if not _LIVEKIT_AVAILABLE or _lk_rtc is None:
                     log.debug("Worker: LiveKit not available — per-turn loop idle")
                     break
-                # Wait briefly for caller to join
-                await asyncio.sleep(_INITIAL_GREETING_TIMEOUT)
-                continue
+                # Wait for the bridge to publish the caller's audio track
+                try:
+                    track = await asyncio.wait_for(_track_queue.get(), timeout=2.0)
+                    caller_audio_stream = _lk_rtc.AudioStream(track)
+                    log.info("Worker: caller audio stream ready — starting STT loop")
+                except asyncio.TimeoutError:
+                    continue  # track not yet arrived; keep waiting
 
             # STT: transcribe the caller's audio stream
+            log.info("PIPELINE[3/7] STT starting — collecting caller audio frames")
             stream_adapter = AudioStreamAdapter(caller_audio_stream)
             caller_text = ""
             last_partial = ""
@@ -544,6 +581,10 @@ async def entrypoint(ctx: Any) -> None:
                         _tts_active = False
                     continue
                 caller_text = event.text
+                log.info(
+                    "PIPELINE[3/7] STT result: text=%.120r confidence=%s",
+                    caller_text, getattr(event, "confidence", None),
+                )
                 break  # final event received; proceed to LLM turn
 
             if not caller_text.strip():

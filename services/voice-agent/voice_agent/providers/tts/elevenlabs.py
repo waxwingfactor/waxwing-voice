@@ -145,6 +145,12 @@ class ElevenLabsTTSAdapter:
             },
         }
 
+        log.info(
+            "ElevenLabsTTSAdapter: synthesizing %d chars voice_id=%s model=%s",
+            len(text), self._voice_id, self._model_id,
+        )
+        _chunk_count = 0
+        _total_bytes = 0
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 async with client.stream("POST", url, headers=headers, json=payload) as response:
@@ -181,13 +187,24 @@ class ElevenLabsTTSAdapter:
 
                     async for chunk in response.aiter_bytes(self._chunk_size):
                         if self._cancel_event.is_set():
-                            log.debug(
-                                "ElevenLabsTTSAdapter: stream cancelled (barge-in)",
-                                extra={"voice_id": self._voice_id},
+                            log.info(
+                                "ElevenLabsTTSAdapter: barge-in cancel after %d chunks (%d bytes)",
+                                _chunk_count, _total_bytes,
                             )
                             return
                         if chunk:
+                            _chunk_count += 1
+                            _total_bytes += len(chunk)
+                            if _chunk_count == 1:
+                                log.info(
+                                    "PIPELINE[5/7] ElevenLabs: first audio chunk received"
+                                    " voice_id=%s", self._voice_id,
+                                )
                             yield chunk
+                    log.info(
+                        "ElevenLabsTTSAdapter: stream complete — chunks=%d bytes=%d",
+                        _chunk_count, _total_bytes,
+                    )
 
         except httpx.TimeoutException as exc:
             raise TTSProviderError(

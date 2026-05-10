@@ -45,6 +45,7 @@ import asyncio
 import io
 import logging
 import struct
+import time
 import wave
 from typing import AsyncIterator
 
@@ -217,16 +218,20 @@ class WhisperSTTAdapter:
         # --- Phase 2: Build WAV and submit to Whisper API ---
         wav_bytes = _build_wav_bytes(bytes(pcm_buffer))
 
-        log.debug(
-            "WhisperSTTAdapter: submitting audio to Whisper",
-            extra={
-                "pcm_bytes": len(pcm_buffer),
-                "wav_bytes": len(wav_bytes),
-                "duration_seconds": len(pcm_buffer) / (_SAMPLE_RATE * _SAMPLE_WIDTH * _CHANNELS),
-            },
+        audio_duration = len(pcm_buffer) / (_SAMPLE_RATE * _SAMPLE_WIDTH * _CHANNELS)
+        log.info(
+            "WhisperSTTAdapter: submitting to API — pcm_bytes=%d wav_bytes=%d audio_secs=%.2f",
+            len(pcm_buffer), len(wav_bytes), audio_duration,
         )
 
+        t0 = time.monotonic()
         text = await self._call_whisper_api(wav_bytes)
+        elapsed = time.monotonic() - t0
+
+        log.info(
+            "WhisperSTTAdapter: API returned in %.2fs — text=%.120r",
+            elapsed, text,
+        )
 
         yield TranscriptionEvent(text=text, is_final=True, confidence=None)
 

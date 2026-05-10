@@ -36,6 +36,13 @@ dependencies = [
     "google-api-python-client>=2.155",
     # Twilio — inbound call webhooks, TwiML generation, and signature validation (Phase 5)
     "twilio>=9.0",
+    # LiveKit bridge (ADR-0004) — RTC SDK and server API for audio bridging
+    "livekit>=0.17",
+    "livekit-api>=0.7",
+    # audioop backport for Python 3.13+ (mulaw<->PCM conversion; stdlib audioop removed in 3.13)
+    # livekit_bridge.py imports this via try/except so it degrades gracefully on 3.12 where
+    # the stdlib module still exists, and on 3.13+ if this package is not installed.
+    "audioop-lts>=0.2; python_version >= '3.13'",
 ]
 
 [dependency-groups]
